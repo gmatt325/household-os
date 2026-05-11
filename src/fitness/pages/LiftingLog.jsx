@@ -4,19 +4,25 @@ import { useFitnessProgram } from '../hooks/useFitnessProgram.js'
 import { upsertWorkoutLog } from '../lib/supabaseQueries.js'
 import SetRow from '../components/SetRow.jsx'
 
-function initSets(exercises) {
-  return exercises.map((ex) => ({
-    name: ex.name,
-    note: ex.note ?? null,
-    isBodyweight: ex.weight_lbs == null,
-    plannedWeight: ex.weight_lbs,
-    plannedReps: ex.reps,
-    sets: Array.from({ length: ex.sets ?? 1 }, () => ({
-      weight_lbs: ex.weight_lbs != null ? String(ex.weight_lbs) : '',
-      reps: '',
-      duration_sec: '',
-    })),
-  }))
+function initSets(exercises, loggedExercises = []) {
+  return exercises.map((ex) => {
+    const logged = loggedExercises.find((l) => l.name === ex.name)
+    return {
+      name: ex.name,
+      note: ex.note ?? null,
+      isBodyweight: ex.weight_lbs == null,
+      plannedWeight: ex.weight_lbs,
+      plannedReps: ex.reps,
+      sets: Array.from({ length: ex.sets ?? 1 }, (_, i) => {
+        const s = logged?.sets?.[i]
+        return {
+          weight_lbs: s?.weight_lbs != null ? String(s.weight_lbs) : (ex.weight_lbs != null ? String(ex.weight_lbs) : ''),
+          reps: s?.reps != null ? String(s.reps) : '',
+          duration_sec: s?.duration_sec != null ? String(s.duration_sec) : '',
+        }
+      }),
+    }
+  })
 }
 
 function reducer(state, action) {
@@ -164,7 +170,19 @@ function StretchMoveList({ moves, checked, onToggle }) {
 const RIDE_TYPES = ['Pop', 'Era', 'HIIT', 'Hills / Climb', '45 min', 'Other']
 
 export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] }) {
-  const [exercises, dispatch] = useReducer(reducer, dayPlan.exercises ?? [], initSets)
+  const label = dayPlan.label ?? dayPlan.workout ?? dayPlan.type
+
+  const existingLiftLog = logs.find((l) =>
+    l.workout_type && l.workout_type === label && l.exercises?.length
+  )
+
+  const [exercises, dispatch] = useReducer(
+    reducer,
+    [dayPlan.exercises ?? [], existingLiftLog?.exercises ?? []],
+    ([planned, logged]) => initSets(planned, logged)
+  )
+
+  const logIdRef = useRef(existingLiftLog?.id ?? null)
   const stretchLogIdRef = useRef(null)
 
   const [stretchChecked, setStretchChecked] = useState(() => {
@@ -199,7 +217,6 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
     } catch {}
   }
   const [saveStatus, setSaveStatus] = useState(null) // null | 'saving' | 'saved' | 'error'
-  const logIdRef = useRef(null)
   const saveTimer = useRef(null)
 
   // Peloton inline state
@@ -213,7 +230,6 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
   const pelotonLogIdRef = useRef(null)
   const pelotonSaveTimer = useRef(null)
 
-  const label = dayPlan.label ?? dayPlan.workout ?? dayPlan.type
   const moves = dayPlan.morning_stretch?.moves ?? []
   const stretchDone = moves.length > 0 && Object.values(stretchChecked).every(Boolean)
   const workoutDone = exercises.length > 0 && exercises.every(isExDone)

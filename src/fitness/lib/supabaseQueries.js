@@ -35,7 +35,7 @@ export async function fetchWeeklyPlanByWeekStart(weekStartISO) {
 export async function fetchWorkoutLogsForDate(dateISO) {
   const { data, error } = await supabase
     .from('fitness_workout_logs')
-    .select('id, workout_type, notes, created_at')
+    .select('id, workout_type, exercises, notes, created_at')
     .eq('workout_date', dateISO)
   if (error) throw error
   return data ?? []
