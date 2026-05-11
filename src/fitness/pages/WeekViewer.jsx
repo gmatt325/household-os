@@ -194,7 +194,7 @@ export default function WeekViewer() {
   const today = todayISO()
   const [weekStart, setWeekStart] = useState(() => weekStartISO(today))
   const [selectedDay, setSelectedDay] = useState(today)
-  const { weeklyPlan, logs, loading, error } = useWeekPlan(weekStart)
+  const { weeklyPlan, logs, loading, error, refetch } = useWeekPlan(weekStart)
 
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
 
@@ -216,21 +216,21 @@ export default function WeekViewer() {
   return (
     <div className="py-6">
       <button onClick={() => navigate('/dashboard/fitness')}
-        className="text-xs uppercase tracking-widest text-zinc-500 mb-6 block">
+        className="text-xs uppercase tracking-widest text-zinc-500 mb-6 min-h-[44px] flex items-center">
         ← Today
       </button>
 
       {/* Week navigation */}
       <div className="flex items-center justify-between mb-5">
         <button onClick={prevWeek}
-          className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center text-zinc-300 active:bg-zinc-700">
+          className="w-11 h-11 rounded-xl bg-zinc-800 flex items-center justify-center text-zinc-300 active:bg-zinc-700">
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
           </svg>
         </button>
         <p className="text-sm font-medium text-zinc-300">{formatWeekRange(weekStart)}</p>
         <button onClick={nextWeek}
-          className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center text-zinc-300 active:bg-zinc-700">
+          className="w-11 h-11 rounded-xl bg-zinc-800 flex items-center justify-center text-zinc-300 active:bg-zinc-700">
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>
@@ -282,7 +282,12 @@ export default function WeekViewer() {
       </div>
 
       {loading && <p className="text-zinc-500 text-sm uppercase tracking-widest">Loading…</p>}
-      {!loading && error && <p className="text-red-400 text-sm">Couldn't load — {error.message}</p>}
+      {!loading && error && (
+        <div className="py-2">
+          <p className="text-red-400 text-sm mb-3">Couldn't load — try again.</p>
+          <button onClick={refetch} className="text-xs uppercase tracking-widest text-zinc-400 border border-zinc-700 rounded-xl px-4 min-h-[44px]">Retry</button>
+        </div>
+      )}
 
       {!loading && !error && (
         <>

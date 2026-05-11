@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { addDays } from '../lib/date.js'
 import { fetchWeeklyPlanForDate, fetchWorkoutLogsForWeek } from '../lib/supabaseQueries.js'
 
@@ -8,7 +8,7 @@ export function useWeekPlan(weekStart) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
+  const load = useCallback(() => {
     setLoading(true)
     setError(null)
     const weekEnd = addDays(weekStart, 6)
@@ -24,5 +24,7 @@ export function useWeekPlan(weekStart) {
       .finally(() => setLoading(false))
   }, [weekStart])
 
-  return { weeklyPlan, logs, loading, error }
+  useEffect(() => { load() }, [load])
+
+  return { weeklyPlan, logs, loading, error, refetch: load }
 }

@@ -70,7 +70,7 @@ export default function PelotonLog() {
     <div className="py-6">
       <button
         onClick={() => navigate('/dashboard/fitness')}
-        className="text-xs uppercase tracking-widest text-zinc-500 mb-6 block"
+        className="text-xs uppercase tracking-widest text-zinc-500 mb-6 min-h-[44px] flex items-center"
       >
         ← Back
       </button>

@@ -366,15 +366,20 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
 }
 
 export default function LiftingLog() {
-  const { weeklyPlan, dayPlan, loading, error, today } = useTodaysPlan()
+  const { weeklyPlan, dayPlan, loading, error, today, refetch } = useTodaysPlan()
   const { program } = useFitnessProgram()
 
   if (loading) return <div className="py-6 text-zinc-500 text-sm uppercase tracking-widest">Loading…</div>
-  if (error) return <div className="py-6 text-red-400 text-sm">Couldn't load — {error.message}</div>
+  if (error) return (
+    <div className="py-6">
+      <p className="text-red-400 text-sm mb-3">Couldn't load — try again.</p>
+      <button onClick={refetch} className="text-xs uppercase tracking-widest text-zinc-400 border border-zinc-700 rounded-xl px-4 min-h-[44px]">Retry</button>
+    </div>
+  )
   if (!dayPlan || dayPlan.type !== 'lift') return (
     <div className="py-6">
       <p className="text-zinc-500">No lift plan for today.</p>
-      <button onClick={() => window.history.back()} className="mt-4 text-xs uppercase tracking-widest text-zinc-500">← Back</button>
+      <button onClick={() => window.history.back()} className="mt-4 text-xs uppercase tracking-widest text-zinc-500 min-h-[44px] flex items-center">← Back</button>
     </div>
   )
 

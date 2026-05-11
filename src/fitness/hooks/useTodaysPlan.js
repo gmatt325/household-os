@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { todayISO } from '../lib/date.js'
 import { fetchWeeklyPlanForDate, fetchWorkoutLogsForDate } from '../lib/supabaseQueries.js'
 
@@ -10,7 +10,9 @@ export function useTodaysPlan() {
   const [error, setError] = useState(null)
   const today = todayISO()
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
     Promise.all([
       fetchWeeklyPlanForDate(today),
       fetchWorkoutLogsForDate(today),
@@ -24,5 +26,7 @@ export function useTodaysPlan() {
       .finally(() => setLoading(false))
   }, [today])
 
-  return { weeklyPlan, dayPlan, logs, isCompleted: logs.length > 0, loading, error, today }
+  useEffect(() => { load() }, [load])
+
+  return { weeklyPlan, dayPlan, logs, isCompleted: logs.length > 0, loading, error, today, refetch: load }
 }

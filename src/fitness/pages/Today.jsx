@@ -70,7 +70,7 @@ function RestDayView({ plan, program, weeklyPlan, today }) {
 
 export default function Today() {
   const navigate = useNavigate()
-  const { weeklyPlan, dayPlan, logs, isCompleted, loading, error, today } = useTodaysPlan()
+  const { weeklyPlan, dayPlan, logs, isCompleted, loading, error, today, refetch } = useTodaysPlan()
   const { program } = useFitnessProgram()
 
   return (
@@ -80,13 +80,18 @@ export default function Today() {
           {formatDayLabel(today)}
         </p>
         <button onClick={() => navigate('/dashboard/fitness/week')}
-          className="text-xs uppercase tracking-widest text-zinc-500 active:text-zinc-300">
+          className="text-xs uppercase tracking-widest text-zinc-500 active:text-zinc-300 min-h-[44px] px-1">
           Week →
         </button>
       </div>
 
       {loading && <p className="text-zinc-500 text-sm uppercase tracking-widest">Loading…</p>}
-      {!loading && error && <p className="text-red-400 text-sm">Couldn't load plan — {error.message}</p>}
+      {!loading && error && (
+        <div className="py-2">
+          <p className="text-red-400 text-sm mb-3">Couldn't load — try again.</p>
+          <button onClick={refetch} className="text-xs uppercase tracking-widest text-zinc-400 border border-zinc-700 rounded-xl px-4 min-h-[44px]">Retry</button>
+        </div>
+      )}
 
       {!loading && !error && !dayPlan && (
         <div>
