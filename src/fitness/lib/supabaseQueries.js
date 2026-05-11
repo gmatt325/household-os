@@ -61,6 +61,26 @@ export async function logWorkout(payload) {
   return data
 }
 
+export async function fetchBodyMetricsForDate(dateISO) {
+  const { data, error } = await supabase
+    .from('fitness_body_metrics')
+    .select('id')
+    .eq('logged_date', dateISO)
+    .maybeSingle()
+  if (error) throw error
+  return data
+}
+
+export async function insertBodyMetrics(payload) {
+  const { data, error } = await supabase
+    .from('fitness_body_metrics')
+    .insert([payload])
+    .select('id')
+    .single()
+  if (error) throw error
+  return data
+}
+
 // Insert on first call (id=null), update on subsequent calls. Returns the id.
 export async function upsertWorkoutLog(id, payload) {
   if (id) {
