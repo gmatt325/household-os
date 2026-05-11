@@ -1,7 +1,14 @@
+import { useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
 import MetricsBanner from './components/MetricsBanner.jsx'
 
 export default function FitnessLayout() {
+  useEffect(() => {
+    const prev = document.body.style.background
+    document.body.style.background = '#09090b' // zinc-950
+    return () => { document.body.style.background = prev }
+  }, [])
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 overflow-x-hidden">
       <MetricsBanner />
