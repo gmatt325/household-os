@@ -165,9 +165,39 @@ const RIDE_TYPES = ['Pop', 'Era', 'HIIT', 'Hills / Climb', '45 min', 'Other']
 
 export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] }) {
   const [exercises, dispatch] = useReducer(reducer, dayPlan.exercises ?? [], initSets)
-  const [stretchChecked, setStretchChecked] = useState(() =>
-    Object.fromEntries((dayPlan.morning_stretch?.moves ?? []).map((_, i) => [i, false]))
-  )
+  const stretchLogIdRef = useRef(null)
+
+  const [stretchChecked, setStretchChecked] = useState(() => {
+    const moves = dayPlan.morning_stretch?.moves ?? []
+    const stretchLog = logs.find((l) => l.workout_type === 'Morning Stretch')
+    if (stretchLog?.notes) {
+      const saved = stretchLog.notes.split(', ')
+      return Object.fromEntries(moves.map((move, i) => [i, saved.includes(move)]))
+    }
+    return Object.fromEntries(moves.map((_, i) => [i, false]))
+  })
+
+  // Initialise stretchLogIdRef from existing log if present
+  useState(() => {
+    const stretchLog = logs.find((l) => l.workout_type === 'Morning Stretch')
+    if (stretchLog) stretchLogIdRef.current = stretchLog.id
+  })
+
+  async function toggleStretch(i) {
+    const next = { ...stretchChecked, [i]: !stretchChecked[i] }
+    setStretchChecked(next)
+    const completedMoves = (dayPlan.morning_stretch?.moves ?? []).filter((_, idx) => next[idx])
+    if (!completedMoves.length) return
+    try {
+      stretchLogIdRef.current = await upsertWorkoutLog(stretchLogIdRef.current, {
+        program_id: program?.id ?? null,
+        weekly_plan_id: weeklyPlan?.id ?? null,
+        workout_date: today,
+        workout_type: 'Morning Stretch',
+        notes: completedMoves.join(', '),
+      })
+    } catch {}
+  }
   const [saveStatus, setSaveStatus] = useState(null) // null | 'saving' | 'saved' | 'error'
   const logIdRef = useRef(null)
   const saveTimer = useRef(null)
@@ -267,7 +297,7 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
             <StretchMoveList
               moves={moves}
               checked={stretchChecked}
-              onToggle={(i) => setStretchChecked((prev) => ({ ...prev, [i]: !prev[i] }))}
+              onToggle={toggleStretch}
             />
           </BigSection>
         )}
