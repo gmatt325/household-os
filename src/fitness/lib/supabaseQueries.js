@@ -1,4 +1,5 @@
 import { supabase } from '../../lib/supabase.js'
+import { appliesToday } from '../../lib/recurrence.js'
 
 export async function fetchActiveProgram() {
   const { data, error } = await supabase
@@ -59,6 +60,25 @@ export async function logWorkout(payload) {
     .single()
   if (error) throw error
   return data
+}
+
+export async function completeWorkoutTasksForToday() {
+  const today = new Date()
+  const todayISO = today.toISOString().slice(0, 10)
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('id, due_date, recurrence, completed')
+    .eq('category', 'workouts')
+    .eq('completed', false)
+  if (error) throw error
+  const applicable = (data ?? []).filter((t) =>
+    t.due_date === todayISO || (!t.due_date && t.recurrence && appliesToday(t.recurrence, today))
+  )
+  if (!applicable.length) return
+  await supabase
+    .from('tasks')
+    .update({ completed: true, completed_at: new Date().toISOString() })
+    .in('id', applicable.map((t) => t.id))
 }
 
 export async function fetchBodyMetricsForDate(dateISO) {

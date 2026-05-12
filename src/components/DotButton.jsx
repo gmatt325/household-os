@@ -1,13 +1,13 @@
-export default function DotButton({ task, onToggle }) {
+export default function DotButton({ task, onToggle, readOnly }) {
   const checked = !!task.completed
   return (
     <button
       type="button"
       onClick={(e) => {
         e.stopPropagation()
-        onToggle?.(task)
+        if (!readOnly) onToggle?.(task)
       }}
-      className="relative shrink-0 w-[62px] h-[62px] rounded-full border border-white/80 bg-white/[0.18] overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+      className={`relative shrink-0 w-[62px] h-[62px] rounded-full border border-white/80 bg-white/[0.18] overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 ${readOnly ? 'cursor-default' : ''}`}
       aria-pressed={checked}
       aria-label={task.title}
     >

@@ -63,6 +63,7 @@ export default function Dashboard() {
               tasks={tasks[row.key] ?? []}
               loading={loading}
               onToggle={toggle}
+              readOnly={row.key === 'workouts'}
             />
           ))}
         </div>

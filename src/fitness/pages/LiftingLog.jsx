@@ -1,7 +1,7 @@
 import { useReducer, useState, useRef, useCallback } from 'react'
 import { useTodaysPlan } from '../hooks/useTodaysPlan.js'
 import { useFitnessProgram } from '../hooks/useFitnessProgram.js'
-import { upsertWorkoutLog } from '../lib/supabaseQueries.js'
+import { upsertWorkoutLog, completeWorkoutTasksForToday } from '../lib/supabaseQueries.js'
 import SetRow from '../components/SetRow.jsx'
 
 function initSets(exercises, loggedExercises = []) {
@@ -259,6 +259,9 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
   // exercises state is captured in closure — pass current value explicitly
   const handleExerciseCollapse = useCallback(() => {
     saveCurrentState(exercises)
+    if (exercises.every(isExDone)) {
+      completeWorkoutTasksForToday().catch(() => {})
+    }
   }, [exercises, saveCurrentState])
 
   const savePeloton = useCallback(async (duration, rideType, watts, calories, avgHR, maxHR) => {

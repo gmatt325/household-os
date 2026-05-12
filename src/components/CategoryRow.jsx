@@ -22,6 +22,7 @@ export default function CategoryRow({
   tasks,
   loading,
   onToggle,
+  readOnly,
 }) {
   const [expanded, setExpanded] = useState(false)
   const hasTasks = tasks.length > 0
@@ -39,62 +40,65 @@ export default function CategoryRow({
   }
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-1.5">
       <div
-        className="w-[108px] shrink-0 text-right font-serif text-[15px] uppercase tracking-wider"
+        className="font-serif text-[13px] uppercase tracking-wider"
         style={{ color }}
       >
         {label}
       </div>
 
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => hasTasks && setExpanded((v) => !v)}
-        onKeyDown={(e) => {
-          if (!hasTasks) return
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            setExpanded((v) => !v)
-          }
-        }}
-        className="min-w-0 px-3 py-2 cursor-pointer select-none"
-        style={pillStyle}
-        aria-expanded={expanded}
-      >
-        {!hasTasks ? (
-          <div className="px-2 py-3 text-white/80 font-sans text-[12px] italic">
-            {loading ? 'Loading…' : 'Nothing today'}
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              {tasks.map((t) => (
-                <DotButton key={t.id} task={t} onToggle={onToggle} />
-              ))}
+      <div className="flex items-center gap-2">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => hasTasks && setExpanded((v) => !v)}
+          onKeyDown={(e) => {
+            if (!hasTasks) return
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setExpanded((v) => !v)
+            }
+          }}
+          className="min-w-0 px-3 py-2 cursor-pointer select-none"
+          style={pillStyle}
+          aria-expanded={expanded}
+        >
+          {!hasTasks ? (
+            <div className="px-2 py-3 text-white/80 font-sans text-[12px] italic">
+              {loading ? 'Loading…' : 'Nothing today'}
             </div>
-
-            {expanded && (
-              <div className="border-t border-white/25 pt-2">
-                {tasks.map((t, i) => (
-                  <TaskItem
-                    key={t.id}
-                    task={t}
-                    index={i}
-                    onToggle={onToggle}
-                  />
+          ) : (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {tasks.map((t) => (
+                  <DotButton key={t.id} task={t} onToggle={onToggle} readOnly={readOnly} />
                 ))}
               </div>
-            )}
-          </div>
-        )}
-      </div>
 
-      <IndicatorDot
-        expanded={expanded}
-        allComplete={allComplete}
-        onClick={() => hasTasks && setExpanded((v) => !v)}
-      />
+              {expanded && (
+                <div className="border-t border-white/25 pt-2">
+                  {tasks.map((t, i) => (
+                    <TaskItem
+                      key={t.id}
+                      task={t}
+                      index={i}
+                      onToggle={onToggle}
+                      readOnly={readOnly}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <IndicatorDot
+          expanded={expanded}
+          allComplete={allComplete}
+          onClick={() => hasTasks && setExpanded((v) => !v)}
+        />
+      </div>
     </div>
   )
 }
