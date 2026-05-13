@@ -64,7 +64,8 @@ export async function logWorkout(payload) {
 
 export async function completeWorkoutTasksForToday() {
   const today = new Date()
-  const todayISO = today.toISOString().slice(0, 10)
+  const d = today
+  const todayISO = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
   const { data, error } = await supabase
     .from('tasks')
     .select('id, due_date, recurrence, completed')
