@@ -7,15 +7,17 @@ A **Fitness tab** lives alongside the Home tab — dark gym-logbook aesthetic, m
 
 ## Local Setup
 - **Path:** `/Users/ishitagupta/Documents/Claude/Household Dashboard`
-- **Dev server:** Double-click `start-dev.command` → opens Safari at `http://localhost:5174`
-- **Port:** 5174 (5173 is used by a separate finance app)
-- **Env vars:** Already in `.env.local` — do not commit this file
+- **Dev server (main):** Double-click `start-dev.command` → opens Safari at `http://localhost:5174`
+- **Dev server (worktree):** Double-click `start-dev-worktree.command` → opens Safari at `http://localhost:5175`
+- **Port:** 5174 main / 5175 worktree (5173 is used by a separate finance app)
+- **Env vars:** Already in `.env.local` — do not commit this file. Must be copied into any new worktree.
 
 ## Stack
 - React 18 + Vite 5
 - Tailwind CSS 3 (custom color tokens: `puppy`, `tasks`, `workouts`, `plants`)
 - @supabase/supabase-js v2
 - React Router v6
+- @dnd-kit/core + @dnd-kit/sortable — drag-to-reorder for exercises and stretch moves
 - Deploy: Vercel (auto-deploys from GitHub on push to `main`)
 
 ## Supabase
@@ -100,20 +102,32 @@ src/
     lib/
       date.js               # todayISO(), formatDayLabel()
       supabaseQueries.js    # fetchActiveProgram, fetchWeeklyPlanForDate (picks latest week_start on overlap),
-                            # fetchWeeklyPlanByWeekStart, fetchWorkoutLogsForDate, fetchWorkoutLogsForWeek,
-                            # logWorkout, upsertWorkoutLog (insert first call / update by id after)
+                            # fetchWeeklyPlanByWeekStart, fetchWorkoutLogsForDate (selects all peloton metric cols),
+                            # fetchWorkoutLogsForWeek, logWorkout, upsertWorkoutLog (insert first / update by id),
+                            # updateWeeklyPlanDay (fetch-then-update single day in days JSONB)
     pages/
       Today.jsx             # Main fitness screen — branches by dayPlan.type:
                             #   lift → LiftingLogForm (inline, no nav)
-                            #   rest/stretch → RestDayView (stretch checklist, saves on each tick)
-                            #   cardio → Peloton CTA (CP4 not built yet)
-      LiftingLog.jsx        # Collapsible BigSection (Morning Stretch + Workout exercises).
-                            # Exports LiftingLogForm for use in Today.jsx.
-                            # Auto-saves (upsert) on exercise collapse. No Finish button.
-      PelotonLog.jsx        # NOT BUILT YET (CP4)
-      WeekViewer.jsx        # NOT BUILT YET (CP5)
+                            #   rest/stretch → RestDayView (BigSection-style stretch checklist, saves on tick,
+                            #                 SortableStretchList for drag-to-reorder, state restored from logs)
+                            #   cardio → CardioDayView (Morning Stretch BigSection + Peloton BigSection,
+                            #            inline inputs, 800ms debounce auto-save, state restored from logs,
+                            #            fixed bottom-right spinner/checkmark save indicator)
+                            # SaveIndicator component: fixed bottom-right, spinner while saving, ✓ when done
+      LiftingLog.jsx        # Collapsible BigSection cards (Morning Stretch + Workout exercises).
+                            # Exports: LiftingLogForm, BigSection, RIDE_TYPES, SortableStretchList.
+                            # Exercises: drag-to-reorder via @dnd-kit (grip handle when collapsed), persists order.
+                            # Stretch: SortableStretchList with drag-to-reorder, name-keyed checked state.
+                            # Auto-saves on exercise collapse. No Finish button.
+      PelotonLog.jsx        # Standalone Peloton log page at /dashboard/fitness/peloton (CP4, built).
+                            # Cardio days now also log inline via CardioDayView — this page is secondary.
+      WeekViewer.jsx        # Week view at /dashboard/fitness/week (CP5, built).
+                            # Horizontal day strip with completion dots, expandable day cards,
+                            # week navigation (prev/next). Uses useWeekPlan hook.
     components/
       SetRow.jsx            # Per-set input with custom ±5/±1 stepper buttons (no native spinners)
+      MetricsBanner.jsx     # CP6: Friday weight prompt + 1st-of-month full measurements form.
+                            # Shown at top of Today when conditions met. Saves to fitness_body_metrics.
       WorkoutCard.jsx       # Used for cardio day overview on Today (morning_stretch shown first)
       StretchChecklist.jsx  # Old-format stretch (exercises[] objects) — legacy, rarely hit
       MorningStretch.jsx    # Reusable morning stretch checklist (local state only, no save)
@@ -136,11 +150,14 @@ src/
 - **Fonts:** Cormorant Garamond (headings/labels, 300/400/500) + Inter (body/dots, 400/500/600)
 - **Category colors:** Puppy `#C4724A` · Tasks `#7A6590` · Workouts `#4A8E72` · Plants `#6A9A42`
 
-## What's Not Built Yet (Fitness)
-- **CP4:** Peloton log (`/dashboard/fitness/peloton`) — duration, ride type, output watts, calories, HR fields → `fitness_workout_logs`
-- **CP5:** Week viewer — mobile horizontal scroll strip / tablet 7-column grid, week navigation, completion dots
-- **CP6:** Metrics banner — Friday weight prompt / 1st-of-month full measurements → `fitness_body_metrics`
-- **CP7:** Polish + Vercel deploy
+## What's Built (Fitness)
+- **CP1–CP3:** Fitness scaffold, Today view (lift/rest/cardio/stretch), LiftingLogForm with auto-save
+- **CP4:** PelotonLog.jsx at `/dashboard/fitness/peloton` + inline Peloton logging inside CardioDayView
+- **CP5:** WeekViewer.jsx at `/dashboard/fitness/week` — horizontal strip + day expansion + week nav
+- **CP6:** MetricsBanner.jsx — Friday weight prompt + 1st-of-month full measurement form
+- **CP7:** Polish — retry handlers, 44px tap targets, timezone bug fixes, SPA 404 fix (vercel.json)
+- **Drag-to-reorder:** exercises within a lift day, stretch moves in all day types; order persists to Supabase
+- **Cardio inline logging:** no nav needed — BigSection cards for stretch + Peloton, auto-save, state restored on reload
 
 ## What's Not Built Yet (Household)
 - Task creation / editing UI (tasks added via Supabase dashboard for now)
