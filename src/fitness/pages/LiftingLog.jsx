@@ -1,7 +1,10 @@
 import { useReducer, useState, useRef, useCallback } from 'react'
+import { DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core'
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { useTodaysPlan } from '../hooks/useTodaysPlan.js'
 import { useFitnessProgram } from '../hooks/useFitnessProgram.js'
-import { upsertWorkoutLog, completeWorkoutTasksForToday } from '../lib/supabaseQueries.js'
+import { upsertWorkoutLog, completeWorkoutTasksForToday, updateWeeklyPlanDay } from '../lib/supabaseQueries.js'
 import SetRow from '../components/SetRow.jsx'
 
 function initSets(exercises, loggedExercises = []) {
@@ -42,6 +45,12 @@ function reducer(state, action) {
         i !== action.exIdx ? ex
           : { ...ex, sets: ex.sets.map((s, j) => j !== action.setIdx ? s : { ...s, duration_sec: action.value }) }
       )
+    case 'REORDER': {
+      const reordered = [...state]
+      const [moved] = reordered.splice(action.from, 1)
+      reordered.splice(action.to, 0, moved)
+      return reordered
+    }
     default:
       return state
   }
@@ -76,7 +85,7 @@ function Chevron({ open }) {
   )
 }
 
-function BigSection({ title, subtitle, done, children, defaultOpen = false, onCollapse }) {
+export function BigSection({ title, subtitle, done, children, defaultOpen = false, onCollapse }) {
   const [open, setOpen] = useState(defaultOpen)
 
   const toggle = () => {
@@ -106,38 +115,56 @@ function BigSection({ title, subtitle, done, children, defaultOpen = false, onCo
   )
 }
 
-function ExerciseSection({ ex, exIdx, dispatch, done, onCollapse }) {
-  const [open, setOpen] = useState(false)
-  const filledSets = ex.sets.filter((s) => (ex.isBodyweight ? s.duration_sec !== '' : s.reps !== '')).length
+function GripIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+      <circle cx="5" cy="4" r="1.5" /><circle cx="11" cy="4" r="1.5" />
+      <circle cx="5" cy="8" r="1.5" /><circle cx="11" cy="8" r="1.5" />
+      <circle cx="5" cy="12" r="1.5" /><circle cx="11" cy="12" r="1.5" />
+    </svg>
+  )
+}
 
-  const toggle = () => {
-    if (open) onCollapse?.()
-    setOpen((p) => !p)
-  }
+function ExerciseSection({ ex, exIdx, dispatch, done, open, onToggle }) {
+  const filledSets = ex.sets.filter((s) => (ex.isBodyweight ? s.duration_sec !== '' : s.reps !== '')).length
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: ex.name })
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }
 
   return (
-    <div className={`rounded-xl border transition-colors ${done ? 'border-emerald-700 bg-emerald-950/30' : 'border-zinc-800 bg-zinc-900/50'}`}>
-      <button type="button" onClick={toggle}
-        className="w-full flex items-center justify-between px-4 py-3 min-h-[52px]">
-        <div className="flex items-center gap-3 min-w-0">
-          {done
-            ? <span className="w-4 h-4 rounded-full bg-emerald-500 flex-shrink-0 flex items-center justify-center text-white text-[10px]">✓</span>
-            : <span className="w-4 h-4 rounded-full border-2 border-zinc-600 flex-shrink-0" />}
-          <div className="text-left min-w-0">
-            <p className={`font-medium text-sm truncate ${done ? 'text-emerald-400' : 'text-zinc-100'}`}>
-              {ex.name}
-              {ex.note && <span className="text-zinc-500 text-xs font-normal ml-1">({ex.note})</span>}
-            </p>
-            <p className="text-xs text-zinc-500">
-              {ex.plannedWeight != null
-                ? `${ex.sets.length} × ${ex.plannedReps} @ ${ex.plannedWeight} lbs`
-                : `${ex.sets.length} × ${ex.plannedReps}`}
-              {filledSets > 0 && !done && ` · ${filledSets}/${ex.sets.length} done`}
-            </p>
+    <div ref={setNodeRef} style={style}
+      className={`rounded-xl border transition-colors ${done ? 'border-emerald-700 bg-emerald-950/30' : 'border-zinc-800 bg-zinc-900/50'}`}>
+      <div className="flex items-center">
+        <button
+          type="button"
+          {...attributes}
+          {...(!open ? listeners : {})}
+          className={`touch-none px-3 flex-shrink-0 flex items-center self-stretch ${open ? 'text-zinc-800 cursor-default' : 'text-zinc-500 cursor-grab active:cursor-grabbing'}`}
+          aria-label="Drag to reorder"
+        >
+          <GripIcon />
+        </button>
+        <button type="button" onClick={onToggle}
+          className="flex-1 flex items-center justify-between pr-4 py-3 min-h-[52px]">
+          <div className="flex items-center gap-3 min-w-0">
+            {done
+              ? <span className="w-4 h-4 rounded-full bg-emerald-500 flex-shrink-0 flex items-center justify-center text-white text-[10px]">✓</span>
+              : <span className="w-4 h-4 rounded-full border-2 border-zinc-600 flex-shrink-0" />}
+            <div className="text-left min-w-0">
+              <p className={`font-medium text-sm truncate ${done ? 'text-emerald-400' : 'text-zinc-100'}`}>
+                {ex.name}
+                {ex.note && <span className="text-zinc-500 text-xs font-normal ml-1">({ex.note})</span>}
+              </p>
+              <p className="text-xs text-zinc-500">
+                {ex.plannedWeight != null
+                  ? `${ex.sets.length} × ${ex.plannedReps} @ ${ex.plannedWeight} lbs`
+                  : `${ex.sets.length} × ${ex.plannedReps}`}
+                {filledSets > 0 && !done && ` · ${filledSets}/${ex.sets.length} done`}
+              </p>
+            </div>
           </div>
-        </div>
-        <span className="text-zinc-500 flex-shrink-0 ml-3"><Chevron open={open} /></span>
-      </button>
+          <span className="text-zinc-500 flex-shrink-0 ml-3"><Chevron open={open} /></span>
+        </button>
+      </div>
       {open && (
         <div className="px-4 pb-3 border-t border-zinc-800 pt-2">
           {ex.sets.map((setData, setIdx) => (
@@ -151,23 +178,59 @@ function ExerciseSection({ ex, exIdx, dispatch, done, onCollapse }) {
   )
 }
 
-function StretchMoveList({ moves, checked, onToggle }) {
+function SortableStretchRow({ move, checked, onToggle }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: move })
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }
+  const isChecked = checked[move] ?? false
   return (
-    <div className="rounded-xl bg-zinc-900/50 border border-zinc-800">
-      {moves.map((move, i) => (
-        <button key={i} type="button" onClick={() => onToggle(i)}
-          className={`w-full flex items-center gap-3 px-4 py-3 border-b border-zinc-800 last:border-0 text-left min-h-[48px] transition-colors ${checked[i] ? 'text-zinc-600' : 'text-zinc-200'}`}>
-          <span className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${checked[i] ? 'border-emerald-500 bg-emerald-500' : 'border-zinc-600'}`}>
-            {checked[i] && <span className="text-white text-[10px] leading-none">✓</span>}
-          </span>
-          <span className={`text-sm flex-1 ${checked[i] ? 'line-through' : ''}`}>{move}</span>
-        </button>
-      ))}
+    <div ref={setNodeRef} style={style}
+      className={`flex items-center border-b border-zinc-800 last:border-0 transition-colors ${isChecked ? 'text-zinc-600' : 'text-zinc-200'}`}>
+      <button type="button" {...attributes} {...(!isChecked ? listeners : {})}
+        className={`touch-none px-3 flex-shrink-0 flex items-center self-stretch ${isChecked ? 'text-zinc-800 cursor-default' : 'text-zinc-500 cursor-grab active:cursor-grabbing'}`}
+        aria-label="Drag to reorder">
+        <GripIcon />
+      </button>
+      <button type="button" onClick={() => onToggle(move)}
+        className="flex-1 flex items-center gap-3 pr-4 py-3 text-left min-h-[48px]">
+        <span className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${isChecked ? 'border-emerald-500 bg-emerald-500' : 'border-zinc-600'}`}>
+          {isChecked && <span className="text-white text-[10px] leading-none">✓</span>}
+        </span>
+        <span className={`text-sm flex-1 ${isChecked ? 'line-through' : ''}`}>{move}</span>
+      </button>
     </div>
   )
 }
 
-const RIDE_TYPES = ['Pop', 'Era', 'HIIT', 'Hills / Climb', '45 min', 'Other']
+export function SortableStretchList({ moves, checked, onToggle, onReorder }) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } })
+  )
+  function handleDragEnd(event) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const from = moves.indexOf(String(active.id))
+    const to = moves.indexOf(String(over.id))
+    if (from === -1 || to === -1) return
+    const reordered = [...moves]
+    const [moved] = reordered.splice(from, 1)
+    reordered.splice(to, 0, moved)
+    onReorder(reordered)
+  }
+  return (
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <SortableContext items={moves} strategy={verticalListSortingStrategy}>
+        <div className="rounded-xl bg-zinc-900/50 border border-zinc-800">
+          {moves.map(move => (
+            <SortableStretchRow key={move} move={move} checked={checked} onToggle={onToggle} />
+          ))}
+        </div>
+      </SortableContext>
+    </DndContext>
+  )
+}
+
+export const RIDE_TYPES = ['Pop', 'Era', 'HIIT', 'Hills / Climb', '45 min', 'Other']
 
 export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] }) {
   const label = dayPlan.label ?? dayPlan.workout ?? dayPlan.type
@@ -185,14 +248,21 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
   const logIdRef = useRef(existingLiftLog?.id ?? null)
   const stretchLogIdRef = useRef(null)
 
+  const [openMap, setOpenMap] = useState({})
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } })
+  )
+
+  const [stretchMoves, setStretchMoves] = useState(dayPlan.morning_stretch?.moves ?? [])
   const [stretchChecked, setStretchChecked] = useState(() => {
     const moves = dayPlan.morning_stretch?.moves ?? []
     const stretchLog = logs.find((l) => l.workout_type === 'Morning Stretch')
     if (stretchLog?.notes) {
       const saved = stretchLog.notes.split(', ')
-      return Object.fromEntries(moves.map((move, i) => [i, saved.includes(move)]))
+      return Object.fromEntries(moves.map((m) => [m, saved.includes(m)]))
     }
-    return Object.fromEntries(moves.map((_, i) => [i, false]))
+    return Object.fromEntries(moves.map((m) => [m, false]))
   })
 
   // Initialise stretchLogIdRef from existing log if present
@@ -201,10 +271,10 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
     if (stretchLog) stretchLogIdRef.current = stretchLog.id
   })
 
-  async function toggleStretch(i) {
-    const next = { ...stretchChecked, [i]: !stretchChecked[i] }
+  async function toggleStretch(moveName) {
+    const next = { ...stretchChecked, [moveName]: !stretchChecked[moveName] }
     setStretchChecked(next)
-    const completedMoves = (dayPlan.morning_stretch?.moves ?? []).filter((_, idx) => next[idx])
+    const completedMoves = stretchMoves.filter((m) => next[m])
     if (!completedMoves.length) return
     try {
       stretchLogIdRef.current = await upsertWorkoutLog(stretchLogIdRef.current, {
@@ -213,6 +283,17 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
         workout_date: today,
         workout_type: 'Morning Stretch',
         notes: completedMoves.join(', '),
+      })
+    } catch {}
+  }
+
+  async function handleStretchReorder(newMoves) {
+    setStretchMoves(newMoves)
+    if (!weeklyPlan?.id) return
+    try {
+      await updateWeeklyPlanDay(weeklyPlan.id, today, {
+        ...dayPlan,
+        morning_stretch: { ...dayPlan.morning_stretch, moves: newMoves },
       })
     } catch {}
   }
@@ -230,8 +311,7 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
   const pelotonLogIdRef = useRef(null)
   const pelotonSaveTimer = useRef(null)
 
-  const moves = dayPlan.morning_stretch?.moves ?? []
-  const stretchDone = moves.length > 0 && Object.values(stretchChecked).every(Boolean)
+  const stretchDone = stretchMoves.length > 0 && stretchMoves.every((m) => stretchChecked[m])
   const workoutDone = exercises.length > 0 && exercises.every(isExDone)
   const pelotonLogged = logs.some((l) => l.workout_type && l.workout_type.toLowerCase().includes('peloton'))
   const pelotonFilled = pelotonDuration !== '' || pelotonWatts !== ''
@@ -255,6 +335,36 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
       setSaveStatus('error')
     }
   }, [program, weeklyPlan, today, label])
+
+  const handleDragEnd = useCallback(async (event) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const from = exercises.findIndex((e) => e.name === active.id)
+    const to = exercises.findIndex((e) => e.name === over.id)
+    if (from === -1 || to === -1) return
+    dispatch({ type: 'REORDER', from, to })
+    // Remap openMap indices after reorder
+    setOpenMap((m) => {
+      const next = {}
+      const order = [...Array(exercises.length).keys()]
+      const [moved] = order.splice(from, 1)
+      order.splice(to, 0, moved)
+      order.forEach((oldIdx, newIdx) => { if (m[oldIdx]) next[newIdx] = true })
+      return next
+    })
+    // Persist new order to Supabase
+    if (!weeklyPlan?.id) return
+    const reordered = [...exercises]
+    const [moved] = reordered.splice(from, 1)
+    reordered.splice(to, 0, moved)
+    const reorderedPlanned = reordered.map((ex) => {
+      const orig = (dayPlan.exercises ?? []).find((p) => p.name === ex.name)
+      return orig ?? { name: ex.name }
+    })
+    try {
+      await updateWeeklyPlanDay(weeklyPlan.id, today, { ...dayPlan, exercises: reorderedPlanned })
+    } catch {}
+  }, [exercises, weeklyPlan, dayPlan, today])
 
   // exercises state is captured in closure — pass current value explicitly
   const handleExerciseCollapse = useCallback(() => {
@@ -313,10 +423,11 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
             ].filter(Boolean).join(' · ')}
             done={stretchDone}
           >
-            <StretchMoveList
-              moves={moves}
+            <SortableStretchList
+              moves={stretchMoves}
               checked={stretchChecked}
               onToggle={toggleStretch}
+              onReorder={handleStretchReorder}
             />
           </BigSection>
         )}
@@ -333,10 +444,21 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
               <p className="text-sm text-zinc-300 leading-relaxed">{dayPlan.warmup}</p>
             </div>
           )}
-          {exercises.map((ex, exIdx) => (
-            <ExerciseSection key={exIdx} ex={ex} exIdx={exIdx} dispatch={dispatch}
-              done={isExDone(ex)} onCollapse={handleExerciseCollapse} />
-          ))}
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={exercises.map((e) => e.name)} strategy={verticalListSortingStrategy}>
+              {exercises.map((ex, exIdx) => (
+                <ExerciseSection key={ex.name} ex={ex} exIdx={exIdx} dispatch={dispatch}
+                  done={isExDone(ex)}
+                  open={openMap[exIdx] ?? false}
+                  onToggle={() => {
+                    const isOpen = openMap[exIdx] ?? false
+                    if (isOpen) handleExerciseCollapse()
+                    setOpenMap((m) => ({ ...m, [exIdx]: !isOpen }))
+                  }}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
         </BigSection>
 
         {dayPlan.peloton && (
