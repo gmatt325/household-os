@@ -1,24 +1,28 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTodaysPlan } from '../hooks/useTodaysPlan.js'
 import { useFitnessProgram } from '../hooks/useFitnessProgram.js'
 import { formatDayLabel } from '../lib/date.js'
-import { upsertWorkoutLog } from '../lib/supabaseQueries.js'
-import { LiftingLogForm } from './LiftingLog.jsx'
+import { upsertWorkoutLog, updateWeeklyPlanDay } from '../lib/supabaseQueries.js'
+import { LiftingLogForm, BigSection, RIDE_TYPES, SortableStretchList } from './LiftingLog.jsx'
 
-function RestDayView({ plan, program, weeklyPlan, today }) {
-  const moves = plan.morning_stretch?.moves ?? []
-  const [checked, setChecked] = useState(() =>
-    Object.fromEntries(moves.map((_, i) => [i, false]))
-  )
+function RestDayView({ plan, program, weeklyPlan, today, logs = [] }) {
+  const initialMoves = plan.morning_stretch?.moves ?? []
+  const stretchLog = logs.find(l => l.workout_type === 'Morning Stretch')
+  const [moves, setMoves] = useState(initialMoves)
+  const [checked, setChecked] = useState(() => {
+    if (!stretchLog?.notes) return Object.fromEntries(initialMoves.map(m => [m, false]))
+    const savedMoves = stretchLog.notes.split(', ')
+    return Object.fromEntries(initialMoves.map(m => [m, savedMoves.includes(m)]))
+  })
   const [saveStatus, setSaveStatus] = useState(null)
-  const logIdRef = useRef(null)
+  const logIdRef = useRef(stretchLog?.id ?? null)
   const saveTimer = useRef(null)
 
-  async function handleToggle(i) {
-    const next = { ...checked, [i]: !checked[i] }
+  async function handleToggle(moveName) {
+    const next = { ...checked, [moveName]: !checked[moveName] }
     setChecked(next)
-    const completedMoves = moves.filter((_, idx) => next[idx])
+    const completedMoves = moves.filter(m => next[m])
     if (!completedMoves.length) return
     setSaveStatus('saving')
     clearTimeout(saveTimer.current)
@@ -35,6 +39,17 @@ function RestDayView({ plan, program, weeklyPlan, today }) {
     } catch {
       setSaveStatus('error')
     }
+  }
+
+  async function handleReorder(newMoves) {
+    setMoves(newMoves)
+    if (!weeklyPlan?.id) return
+    try {
+      await updateWeeklyPlanDay(weeklyPlan.id, today, {
+        ...plan,
+        morning_stretch: { ...plan.morning_stretch, moves: newMoves },
+      })
+    } catch {}
   }
 
   return (
@@ -55,15 +70,190 @@ function RestDayView({ plan, program, weeklyPlan, today }) {
       {plan.morning_stretch?.focus && (
         <p className="text-sm text-zinc-400 mb-3">{plan.morning_stretch.focus}</p>
       )}
-      {moves.map((move, i) => (
-        <button key={i} onClick={() => handleToggle(i)}
-          className={`w-full flex items-center gap-3 py-3 border-b border-zinc-800 last:border-0 text-left min-h-[48px] transition-colors ${checked[i] ? 'text-zinc-600' : 'text-zinc-200'}`}>
-          <span className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${checked[i] ? 'border-emerald-500 bg-emerald-500' : 'border-zinc-600'}`}>
-            {checked[i] && <span className="text-white text-[10px] leading-none">✓</span>}
-          </span>
-          <span className={`text-sm flex-1 ${checked[i] ? 'line-through' : ''}`}>{move}</span>
-        </button>
-      ))}
+      <SortableStretchList moves={moves} checked={checked} onToggle={handleToggle} onReorder={handleReorder} />
+    </div>
+  )
+}
+
+function SaveIndicator({ status }) {
+  return (
+    <div className="fixed bottom-6 right-6 flex items-center justify-center w-8 h-8 pointer-events-none z-10">
+      {status === 'saving' && (
+        <span className="w-4 h-4 rounded-full border-2 border-zinc-500 border-t-transparent animate-spin block" />
+      )}
+      {status === 'saved' && (
+        <span className="text-emerald-400 text-base leading-none">✓</span>
+      )}
+    </div>
+  )
+}
+
+function CardioDayView({ dayPlan, weeklyPlan, program, today, logs }) {
+  const initialMoves = dayPlan.morning_stretch?.moves ?? []
+  const stretchLog = logs.find(l => l.workout_type === 'Morning Stretch')
+  const pelotonLog = logs.find(l => l.workout_type && l.workout_type !== 'Morning Stretch' && l.peloton_ride_type != null)
+    ?? logs.find(l => l.workout_type === 'Peloton')
+
+  const [stretchMoves, setStretchMoves] = useState(initialMoves)
+  const [checked, setChecked] = useState(() => {
+    if (!stretchLog?.notes) return Object.fromEntries(initialMoves.map(m => [m, false]))
+    const saved = stretchLog.notes.split(', ')
+    return Object.fromEntries(initialMoves.map(m => [m, saved.includes(m)]))
+  })
+  const stretchLogIdRef = useRef(stretchLog?.id ?? null)
+
+  const [duration, setDuration] = useState(pelotonLog?.duration_minutes != null ? String(pelotonLog.duration_minutes) : '')
+  const [rideType, setRideType] = useState(pelotonLog?.peloton_ride_type ?? '')
+  const [watts, setWatts] = useState(pelotonLog?.peloton_output_watts != null ? String(pelotonLog.peloton_output_watts) : '')
+  const [calories, setCalories] = useState(pelotonLog?.active_calories != null ? String(pelotonLog.active_calories) : '')
+  const [avgHR, setAvgHR] = useState(pelotonLog?.avg_heart_rate != null ? String(pelotonLog.avg_heart_rate) : '')
+  const [maxHR, setMaxHR] = useState(pelotonLog?.max_heart_rate != null ? String(pelotonLog.max_heart_rate) : '')
+  const pelotonLogIdRef = useRef(pelotonLog?.id ?? null)
+
+  const [saveStatus, setSaveStatus] = useState(null)
+  const saveTimer = useRef(null)
+  const debounceTimer = useRef(null)
+
+  const triggerSaved = useCallback(() => {
+    setSaveStatus('saved')
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => setSaveStatus(null), 2000)
+  }, [])
+
+  async function handleStretchToggle(moveName) {
+    const next = { ...checked, [moveName]: !checked[moveName] }
+    setChecked(next)
+    const completedMoves = stretchMoves.filter(m => next[m])
+    if (!completedMoves.length) return
+    setSaveStatus('saving')
+    try {
+      stretchLogIdRef.current = await upsertWorkoutLog(stretchLogIdRef.current, {
+        program_id: program?.id ?? null,
+        weekly_plan_id: weeklyPlan?.id ?? null,
+        workout_date: today,
+        workout_type: 'Morning Stretch',
+        notes: completedMoves.join(', '),
+      })
+      triggerSaved()
+    } catch { setSaveStatus('error') }
+  }
+
+  async function handleStretchReorder(newMoves) {
+    setStretchMoves(newMoves)
+    if (!weeklyPlan?.id) return
+    try {
+      await updateWeeklyPlanDay(weeklyPlan.id, today, {
+        ...dayPlan,
+        morning_stretch: { ...dayPlan.morning_stretch, moves: newMoves },
+      })
+    } catch {}
+  }
+
+  const savePeloton = useCallback(async (d, rt, w, cal, aHR, mHR) => {
+    if (!d && !w) return
+    setSaveStatus('saving')
+    try {
+      pelotonLogIdRef.current = await upsertWorkoutLog(pelotonLogIdRef.current, {
+        program_id: program?.id ?? null,
+        weekly_plan_id: weeklyPlan?.id ?? null,
+        workout_date: today,
+        workout_type: rt || 'Peloton',
+        duration_minutes: d !== '' ? Number(d) : null,
+        peloton_output_watts: w !== '' ? Number(w) : null,
+        peloton_ride_type: rt || null,
+        active_calories: cal !== '' ? Number(cal) : null,
+        avg_heart_rate: aHR !== '' ? Number(aHR) : null,
+        max_heart_rate: mHR !== '' ? Number(mHR) : null,
+      })
+      triggerSaved()
+    } catch { setSaveStatus('error') }
+  }, [program, weeklyPlan, today, triggerSaved])
+
+  function scheduleSave(d, rt, w, cal, aHR, mHR) {
+    clearTimeout(debounceTimer.current)
+    debounceTimer.current = setTimeout(() => savePeloton(d, rt, w, cal, aHR, mHR), 800)
+  }
+
+  function handleField(setter, getValue) {
+    return (e) => {
+      const val = e.target.value
+      setter(val)
+      const next = getValue(val)
+      scheduleSave(...next)
+    }
+  }
+
+  const stretchDone = stretchMoves.length > 0 && stretchMoves.every(m => checked[m])
+  const pelotonFilled = duration !== '' || watts !== ''
+
+  return (
+    <div className="pb-8">
+      <SaveIndicator status={saveStatus} />
+      <p className="text-3xl font-bold mb-2">{dayPlan.label ?? dayPlan.workout ?? 'Cardio'}</p>
+      {dayPlan.notes && <p className="text-zinc-500 text-sm mb-6">{dayPlan.notes}</p>}
+
+      <div className="space-y-4 mt-6">
+        {dayPlan.morning_stretch && (
+          <BigSection
+            title="Morning Stretch"
+            subtitle={[
+              dayPlan.morning_stretch.duration_minutes ? `${dayPlan.morning_stretch.duration_minutes} min` : null,
+              dayPlan.morning_stretch.focus,
+            ].filter(Boolean).join(' · ')}
+            done={stretchDone}
+          >
+            <SortableStretchList moves={stretchMoves} checked={checked} onToggle={handleStretchToggle} onReorder={handleStretchReorder} />
+          </BigSection>
+        )}
+
+        <BigSection
+          title="Peloton"
+          subtitle={dayPlan.workout ?? null}
+          done={pelotonFilled}
+        >
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-x-5 pt-1">
+            <div className="flex flex-col gap-1.5">
+              <p className="text-xs uppercase tracking-widest text-zinc-500">Duration (min)</p>
+              <input type="text" inputMode="numeric" value={duration} placeholder="30"
+                onChange={handleField(setDuration, (v) => [v, rideType, watts, calories, avgHR, maxHR])}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <p className="text-xs uppercase tracking-widest text-zinc-500">Ride Type</p>
+              <select value={rideType}
+                onChange={handleField(setRideType, (v) => [duration, v, watts, calories, avgHR, maxHR])}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-xl font-bold text-zinc-100 focus:outline-none focus:border-zinc-400 min-h-[56px] appearance-none">
+                <option value="">Select…</option>
+                {RIDE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <p className="text-xs uppercase tracking-widest text-zinc-500">Output (watts)</p>
+              <input type="text" inputMode="decimal" value={watts} placeholder="250"
+                onChange={handleField(setWatts, (v) => [duration, rideType, v, calories, avgHR, maxHR])}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <p className="text-xs uppercase tracking-widest text-zinc-500">Active Calories</p>
+              <input type="text" inputMode="numeric" value={calories} placeholder="300"
+                onChange={handleField(setCalories, (v) => [duration, rideType, watts, v, avgHR, maxHR])}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <p className="text-xs uppercase tracking-widest text-zinc-500">Avg Heart Rate</p>
+              <input type="text" inputMode="numeric" value={avgHR} placeholder="148"
+                onChange={handleField(setAvgHR, (v) => [duration, rideType, watts, calories, v, maxHR])}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <p className="text-xs uppercase tracking-widest text-zinc-500">Max Heart Rate</p>
+              <input type="text" inputMode="numeric" value={maxHR} placeholder="172"
+                onChange={handleField(setMaxHR, (v) => [duration, rideType, watts, calories, avgHR, v])}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
+            </div>
+          </div>
+        </BigSection>
+      </div>
     </div>
   )
 }
@@ -126,25 +316,19 @@ export default function Today() {
               </div>
               <h2 className="text-3xl font-bold tracking-tight mb-6">Rest Day</h2>
               {dayPlan.morning_stretch && (
-                <RestDayView plan={dayPlan} program={program} weeklyPlan={weeklyPlan} today={today} />
+                <RestDayView plan={dayPlan} program={program} weeklyPlan={weeklyPlan} today={today} logs={logs} />
               )}
             </>
           )}
 
           {dayPlan.type === 'cardio' && (
-            <div>
-              <p className="text-3xl font-bold mb-2">{dayPlan.label ?? dayPlan.workout ?? 'Cardio'}</p>
-              <p className="text-zinc-500 text-sm mb-6">{dayPlan.notes ?? ''}</p>
-              {isCompleted && (
-                <p className="text-emerald-400 text-sm mb-4">✓ Logged today</p>
-              )}
-              <button
-                onClick={() => navigate('/dashboard/fitness/peloton')}
-                className="w-full py-4 bg-white text-zinc-950 font-bold text-sm uppercase tracking-widest rounded-xl min-h-[56px]"
-              >
-                {isCompleted ? 'Log Another Ride' : 'Start Peloton Log'}
-              </button>
-            </div>
+            <CardioDayView
+              dayPlan={dayPlan}
+              weeklyPlan={weeklyPlan}
+              program={program}
+              today={today}
+              logs={logs}
+            />
           )}
         </>
       )}

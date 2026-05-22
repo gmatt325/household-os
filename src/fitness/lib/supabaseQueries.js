@@ -36,7 +36,7 @@ export async function fetchWeeklyPlanByWeekStart(weekStartISO) {
 export async function fetchWorkoutLogsForDate(dateISO) {
   const { data, error } = await supabase
     .from('fitness_workout_logs')
-    .select('id, workout_type, exercises, notes, created_at')
+    .select('id, workout_type, exercises, notes, created_at, duration_minutes, peloton_output_watts, peloton_ride_type, active_calories, avg_heart_rate, max_heart_rate')
     .eq('workout_date', dateISO)
   if (error) throw error
   return data ?? []
@@ -100,6 +100,21 @@ export async function insertBodyMetrics(payload) {
     .single()
   if (error) throw error
   return data
+}
+
+export async function updateWeeklyPlanDay(weeklyPlanId, dateISO, dayData) {
+  const { data: current, error: fetchError } = await supabase
+    .from('fitness_weekly_plans')
+    .select('days')
+    .eq('id', weeklyPlanId)
+    .single()
+  if (fetchError) throw fetchError
+  const updatedDays = { ...current.days, [dateISO]: dayData }
+  const { error } = await supabase
+    .from('fitness_weekly_plans')
+    .update({ days: updatedDays })
+    .eq('id', weeklyPlanId)
+  if (error) throw error
 }
 
 // Insert on first call (id=null), update on subsequent calls. Returns the id.
