@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useTodaysTasks } from '../hooks/useTodaysTasks.js'
 import { useToggleTask } from '../hooks/useToggleTask.js'
+import { useTodaysFitnessVirtualTasks } from '../fitness/hooks/useTodaysFitnessVirtualTasks.js'
 import CategoryRow from '../components/CategoryRow.jsx'
 
 const ROWS = [
@@ -24,7 +25,14 @@ export default function Dashboard() {
   const { tasks, loading, error, setOptimistic, clearOptimistic } =
     useTodaysTasks()
   const toggle = useToggleTask({ setOptimistic, clearOptimistic })
+  const { parents: fitnessParents, childrenByParentId, hasPlan } =
+    useTodaysFitnessVirtualTasks()
   const dateLabel = useMemo(() => formatDate(), [])
+
+  const workoutsTasks = hasPlan ? fitnessParents : (tasks.workouts ?? [])
+  const workoutsExpanded = hasPlan
+    ? fitnessParents.flatMap((p) => [p, ...(childrenByParentId[p.id] ?? [])])
+    : workoutsTasks
 
   return (
     <div className="min-h-full">
@@ -54,18 +62,24 @@ export default function Dashboard() {
         )}
 
         <div className="space-y-4">
-          {ROWS.map((row) => (
-            <CategoryRow
-              key={row.key}
-              categoryKey={row.key}
-              label={row.label}
-              color={row.color}
-              tasks={tasks[row.key] ?? []}
-              loading={loading}
-              onToggle={toggle}
-              readOnly={row.key === 'workouts'}
-            />
-          ))}
+          {ROWS.map((row) => {
+            const isWorkouts = row.key === 'workouts'
+            const rowTasks = isWorkouts ? workoutsTasks : (tasks[row.key] ?? [])
+            const rowExpanded = isWorkouts ? workoutsExpanded : undefined
+            return (
+              <CategoryRow
+                key={row.key}
+                categoryKey={row.key}
+                label={row.label}
+                color={row.color}
+                tasks={rowTasks}
+                expandedTasks={rowExpanded}
+                loading={loading}
+                onToggle={toggle}
+                readOnly={isWorkouts}
+              />
+            )
+          })}
         </div>
       </div>
     </div>

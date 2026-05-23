@@ -20,10 +20,12 @@ export default function CategoryRow({
   label,
   color,
   tasks,
+  expandedTasks,
   loading,
   onToggle,
   readOnly,
 }) {
+  const expandedList = expandedTasks ?? tasks
   const [expanded, setExpanded] = useState(false)
   const hasTasks = tasks.length > 0
   const allComplete = hasTasks && tasks.every((t) => t.completed)
@@ -78,7 +80,7 @@ export default function CategoryRow({
 
               {expanded && (
                 <div className="border-t border-white/25 pt-2">
-                  {tasks.map((t, i) => (
+                  {expandedList.map((t, i) => (
                     <TaskItem
                       key={t.id}
                       task={t}

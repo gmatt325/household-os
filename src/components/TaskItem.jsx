@@ -18,7 +18,7 @@ export default function TaskItem({ task, index, onToggle, readOnly }) {
           onToggle?.(task)
         }
       }}
-      className={`task-stagger flex items-center gap-3 py-2 px-1 rounded-lg ${readOnly ? 'cursor-default' : 'cursor-pointer hover:bg-white/10'}`}
+      className={`task-stagger flex items-center gap-3 py-2 px-1 rounded-lg ${task.virtual_child ? 'pl-6' : ''} ${readOnly ? 'cursor-default' : 'cursor-pointer hover:bg-white/10'}`}
       style={{ '--i': index }}
     >
       <span
