@@ -5,6 +5,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { useTodaysPlan } from '../hooks/useTodaysPlan.js'
 import { useFitnessProgram } from '../hooks/useFitnessProgram.js'
 import { upsertWorkoutLog, completeWorkoutTasksForToday, updateWeeklyPlanDay } from '../lib/supabaseQueries.js'
+import { getActivities, replaceActivity, KIND_LIFT } from '../lib/dayShape.js'
 import SetRow from '../components/SetRow.jsx'
 
 function initSets(exercises, loggedExercises = []) {
@@ -232,8 +233,8 @@ export function SortableStretchList({ moves, checked, onToggle, onReorder }) {
 
 export const RIDE_TYPES = ['Pop', 'Era', 'HIIT', 'Hills / Climb', '45 min', 'Other']
 
-export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] }) {
-  const label = dayPlan.label ?? dayPlan.workout ?? dayPlan.type
+export function LiftingLogForm({ liftActivity, dayPlan, weeklyPlan, program, today, logs = [] }) {
+  const label = liftActivity.workout ?? 'Lift'
 
   const existingLiftLog = logs.find((l) =>
     l.workout_type && l.workout_type === label && l.exercises?.length
@@ -241,12 +242,11 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
 
   const [exercises, dispatch] = useReducer(
     reducer,
-    [dayPlan.exercises ?? [], existingLiftLog?.exercises ?? []],
+    [liftActivity.exercises ?? [], existingLiftLog?.exercises ?? []],
     ([planned, logged]) => initSets(planned, logged)
   )
 
   const logIdRef = useRef(existingLiftLog?.id ?? null)
-  const stretchLogIdRef = useRef(null)
 
   const [openMap, setOpenMap] = useState({})
   const sensors = useSensors(
@@ -254,67 +254,10 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } })
   )
 
-  const [stretchMoves, setStretchMoves] = useState(dayPlan.morning_stretch?.moves ?? [])
-  const [stretchChecked, setStretchChecked] = useState(() => {
-    const moves = dayPlan.morning_stretch?.moves ?? []
-    const stretchLog = logs.find((l) => l.workout_type === 'Morning Stretch')
-    if (stretchLog?.notes) {
-      const saved = stretchLog.notes.split(', ')
-      return Object.fromEntries(moves.map((m) => [m, saved.includes(m)]))
-    }
-    return Object.fromEntries(moves.map((m) => [m, false]))
-  })
-
-  // Initialise stretchLogIdRef from existing log if present
-  useState(() => {
-    const stretchLog = logs.find((l) => l.workout_type === 'Morning Stretch')
-    if (stretchLog) stretchLogIdRef.current = stretchLog.id
-  })
-
-  async function toggleStretch(moveName) {
-    const next = { ...stretchChecked, [moveName]: !stretchChecked[moveName] }
-    setStretchChecked(next)
-    const completedMoves = stretchMoves.filter((m) => next[m])
-    if (!completedMoves.length) return
-    try {
-      stretchLogIdRef.current = await upsertWorkoutLog(stretchLogIdRef.current, {
-        program_id: program?.id ?? null,
-        weekly_plan_id: weeklyPlan?.id ?? null,
-        workout_date: today,
-        workout_type: 'Morning Stretch',
-        notes: completedMoves.join(', '),
-      })
-    } catch {}
-  }
-
-  async function handleStretchReorder(newMoves) {
-    setStretchMoves(newMoves)
-    if (!weeklyPlan?.id) return
-    try {
-      await updateWeeklyPlanDay(weeklyPlan.id, today, {
-        ...dayPlan,
-        morning_stretch: { ...dayPlan.morning_stretch, moves: newMoves },
-      })
-    } catch {}
-  }
   const [saveStatus, setSaveStatus] = useState(null) // null | 'saving' | 'saved' | 'error'
   const saveTimer = useRef(null)
 
-  // Peloton inline state
-  const [pelotonDuration, setPelotonDuration] = useState('')
-  const [pelotonRideType, setPelotonRideType] = useState('')
-  const [pelotonWatts, setPelotonWatts] = useState('')
-  const [pelotonCalories, setPelotonCalories] = useState('')
-  const [pelotonAvgHR, setPelotonAvgHR] = useState('')
-  const [pelotonMaxHR, setPelotonMaxHR] = useState('')
-  const [pelotonSaveStatus, setPelotonSaveStatus] = useState(null)
-  const pelotonLogIdRef = useRef(null)
-  const pelotonSaveTimer = useRef(null)
-
-  const stretchDone = stretchMoves.length > 0 && stretchMoves.every((m) => stretchChecked[m])
   const workoutDone = exercises.length > 0 && exercises.every(isExDone)
-  const pelotonLogged = logs.some((l) => l.workout_type && l.workout_type.toLowerCase().includes('peloton'))
-  const pelotonFilled = pelotonDuration !== '' || pelotonWatts !== ''
 
   const saveCurrentState = useCallback(async (currentExercises) => {
     const payload = buildPayload(currentExercises)
@@ -352,19 +295,22 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
       order.forEach((oldIdx, newIdx) => { if (m[oldIdx]) next[newIdx] = true })
       return next
     })
-    // Persist new order to Supabase
+    // Persist new order to Supabase via the activity slice of the day
     if (!weeklyPlan?.id) return
     const reordered = [...exercises]
     const [moved] = reordered.splice(from, 1)
     reordered.splice(to, 0, moved)
     const reorderedPlanned = reordered.map((ex) => {
-      const orig = (dayPlan.exercises ?? []).find((p) => p.name === ex.name)
+      const orig = (liftActivity.exercises ?? []).find((p) => p.name === ex.name)
       return orig ?? { name: ex.name }
     })
+    const nextDay = replaceActivity(dayPlan, today, liftActivity.id, (a) => ({
+      ...a, exercises: reorderedPlanned,
+    }))
     try {
-      await updateWeeklyPlanDay(weeklyPlan.id, today, { ...dayPlan, exercises: reorderedPlanned })
+      await updateWeeklyPlanDay(weeklyPlan.id, today, nextDay)
     } catch {}
-  }, [exercises, weeklyPlan, dayPlan, today])
+  }, [exercises, weeklyPlan, dayPlan, today, liftActivity])
 
   // exercises state is captured in closure — pass current value explicitly
   const handleExerciseCollapse = useCallback(() => {
@@ -373,34 +319,6 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
       completeWorkoutTasksForToday().catch(() => {})
     }
   }, [exercises, saveCurrentState])
-
-  const savePeloton = useCallback(async (duration, rideType, watts, calories, avgHR, maxHR) => {
-    if (!duration && !watts) return
-    setPelotonSaveStatus('saving')
-    clearTimeout(pelotonSaveTimer.current)
-    try {
-      pelotonLogIdRef.current = await upsertWorkoutLog(pelotonLogIdRef.current, {
-        program_id: program?.id ?? null,
-        weekly_plan_id: weeklyPlan?.id ?? null,
-        workout_date: today,
-        workout_type: rideType || 'Peloton',
-        duration_minutes: duration !== '' ? Number(duration) : null,
-        peloton_output_watts: watts !== '' ? Number(watts) : null,
-        peloton_ride_type: rideType || null,
-        active_calories: calories !== '' ? Number(calories) : null,
-        avg_heart_rate: avgHR !== '' ? Number(avgHR) : null,
-        max_heart_rate: maxHR !== '' ? Number(maxHR) : null,
-      })
-      setPelotonSaveStatus('saved')
-      pelotonSaveTimer.current = setTimeout(() => setPelotonSaveStatus(null), 2000)
-    } catch {
-      setPelotonSaveStatus('error')
-    }
-  }, [program, weeklyPlan, today])
-
-  const handlePelotonCollapse = useCallback(() => {
-    savePeloton(pelotonDuration, pelotonRideType, pelotonWatts, pelotonCalories, pelotonAvgHR, pelotonMaxHR)
-  }, [pelotonDuration, pelotonRideType, pelotonWatts, pelotonCalories, pelotonAvgHR, pelotonMaxHR, savePeloton])
 
   return (
     <div className="pb-8">
@@ -414,34 +332,17 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
       </div>
 
       <div className="space-y-4">
-        {dayPlan.morning_stretch && (
-          <BigSection
-            title="Morning Stretch"
-            subtitle={[
-              dayPlan.morning_stretch.duration_minutes ? `${dayPlan.morning_stretch.duration_minutes} min` : null,
-              dayPlan.morning_stretch.focus,
-            ].filter(Boolean).join(' · ')}
-            done={stretchDone}
-          >
-            <SortableStretchList
-              moves={stretchMoves}
-              checked={stretchChecked}
-              onToggle={toggleStretch}
-              onReorder={handleStretchReorder}
-            />
-          </BigSection>
-        )}
-
         <BigSection
           title={label}
           subtitle={`${exercises.length} exercise${exercises.length !== 1 ? 's' : ''}`}
           done={workoutDone}
           onCollapse={handleExerciseCollapse}
+          defaultOpen
         >
-          {dayPlan.warmup && (
+          {liftActivity.warmup && (
             <div className="rounded-xl bg-zinc-900/50 border border-zinc-800 px-4 py-3 mb-1">
               <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">Warmup</p>
-              <p className="text-sm text-zinc-300 leading-relaxed">{dayPlan.warmup}</p>
+              <p className="text-sm text-zinc-300 leading-relaxed">{liftActivity.warmup}</p>
             </div>
           )}
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -460,84 +361,13 @@ export function LiftingLogForm({ dayPlan, weeklyPlan, program, today, logs = [] 
             </SortableContext>
           </DndContext>
         </BigSection>
-
-        {dayPlan.peloton && (
-          <BigSection
-            title="Peloton"
-            subtitle={dayPlan.peloton.workout ?? null}
-            done={pelotonLogged || pelotonFilled}
-            onCollapse={handlePelotonCollapse}
-          >
-            <div className="space-y-4 pt-1">
-              <div className="flex items-center justify-end min-h-[16px]">
-                <span className={`text-xs transition-opacity ${pelotonSaveStatus ? 'opacity-100' : 'opacity-0'} ${
-                  pelotonSaveStatus === 'saving' ? 'text-zinc-500' :
-                  pelotonSaveStatus === 'saved' ? 'text-emerald-400' : 'text-red-400'
-                }`}>
-                  {pelotonSaveStatus === 'saving' ? 'Saving…' : pelotonSaveStatus === 'saved' ? '✓ Saved' : 'Save failed'}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-x-5">
-                <div className="flex flex-col gap-1.5">
-                  <p className="text-xs uppercase tracking-widest text-zinc-500">Duration (min)</p>
-                  <input type="text" inputMode="numeric" value={pelotonDuration}
-                    onChange={(e) => setPelotonDuration(e.target.value)}
-                    placeholder="30"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <p className="text-xs uppercase tracking-widest text-zinc-500">Ride Type</p>
-                  <select value={pelotonRideType} onChange={(e) => setPelotonRideType(e.target.value)}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-xl font-bold text-zinc-100 focus:outline-none focus:border-zinc-400 min-h-[56px] appearance-none">
-                    <option value="">Select…</option>
-                    {RIDE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <p className="text-xs uppercase tracking-widest text-zinc-500">Output (watts)</p>
-                  <input type="text" inputMode="decimal" value={pelotonWatts}
-                    onChange={(e) => setPelotonWatts(e.target.value)}
-                    placeholder="250"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <p className="text-xs uppercase tracking-widest text-zinc-500">Active Calories</p>
-                  <input type="text" inputMode="numeric" value={pelotonCalories}
-                    onChange={(e) => setPelotonCalories(e.target.value)}
-                    placeholder="300"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <p className="text-xs uppercase tracking-widest text-zinc-500">Avg Heart Rate</p>
-                  <input type="text" inputMode="numeric" value={pelotonAvgHR}
-                    onChange={(e) => setPelotonAvgHR(e.target.value)}
-                    placeholder="148"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <p className="text-xs uppercase tracking-widest text-zinc-500">Max Heart Rate</p>
-                  <input type="text" inputMode="numeric" value={pelotonMaxHR}
-                    onChange={(e) => setPelotonMaxHR(e.target.value)}
-                    placeholder="172"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 text-2xl font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-400 min-h-[56px]" />
-                </div>
-              </div>
-            </div>
-          </BigSection>
-        )}
       </div>
     </div>
   )
 }
 
 export default function LiftingLog() {
-  const { weeklyPlan, dayPlan, loading, error, today, refetch } = useTodaysPlan()
+  const { weeklyPlan, dayPlan, logs, loading, error, today, refetch } = useTodaysPlan()
   const { program } = useFitnessProgram()
 
   if (loading) return <div className="py-6 text-zinc-500 text-sm uppercase tracking-widest">Loading…</div>
@@ -547,12 +377,13 @@ export default function LiftingLog() {
       <button onClick={refetch} className="text-xs uppercase tracking-widest text-zinc-400 border border-zinc-700 rounded-xl px-4 min-h-[44px]">Retry</button>
     </div>
   )
-  if (!dayPlan || dayPlan.type !== 'lift') return (
+  const liftActivity = getActivities(dayPlan, today).find((a) => a.kind === KIND_LIFT)
+  if (!liftActivity) return (
     <div className="py-6">
       <p className="text-zinc-500">No lift plan for today.</p>
       <button onClick={() => window.history.back()} className="mt-4 text-xs uppercase tracking-widest text-zinc-500 min-h-[44px] flex items-center">← Back</button>
     </div>
   )
 
-  return <LiftingLogForm dayPlan={dayPlan} weeklyPlan={weeklyPlan} program={program} today={today} />
+  return <LiftingLogForm liftActivity={liftActivity} dayPlan={dayPlan} weeklyPlan={weeklyPlan} program={program} today={today} logs={logs ?? []} />
 }

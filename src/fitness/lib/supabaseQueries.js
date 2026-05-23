@@ -103,13 +103,19 @@ export async function insertBodyMetrics(payload) {
 }
 
 export async function updateWeeklyPlanDay(weeklyPlanId, dateISO, dayData) {
+  return updateWeeklyPlanDays(weeklyPlanId, { [dateISO]: dayData })
+}
+
+// Atomic write of multiple days into the days JSONB. Used by drag-to-move so
+// source + target dates update together.
+export async function updateWeeklyPlanDays(weeklyPlanId, dayUpdates) {
   const { data: current, error: fetchError } = await supabase
     .from('fitness_weekly_plans')
     .select('days')
     .eq('id', weeklyPlanId)
     .single()
   if (fetchError) throw fetchError
-  const updatedDays = { ...current.days, [dateISO]: dayData }
+  const updatedDays = { ...current.days, ...dayUpdates }
   const { error } = await supabase
     .from('fitness_weekly_plans')
     .update({ days: updatedDays })
