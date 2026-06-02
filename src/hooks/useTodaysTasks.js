@@ -57,6 +57,9 @@ function visibilityFor(row, today, todayISO) {
 
   // 3. Recurring.
   if (row.recurrence) {
+    // Completed today → keep visible as done until midnight.
+    if (row.completed && completedToday) return { show: true, aged_from: null }
+
     // Treat as fresh if not completed today.
     const effectivelyIncomplete = !row.completed || !completedToday
     const matchesToday = appliesToday(row.recurrence, today)

@@ -31,7 +31,7 @@ export default function TaskItem({ task, index, onToggle, readOnly }) {
     <div
       role="button"
       tabIndex={0}
-      onClick={() => !readOnly && onToggle?.(task)}
+      onClick={(e) => { e.stopPropagation(); if (!readOnly) onToggle?.(task) }}
       onKeyDown={(e) => {
         if (readOnly) return
         if (e.key === 'Enter' || e.key === ' ') {
