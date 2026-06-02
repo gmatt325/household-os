@@ -78,22 +78,42 @@ src/
   index.css                 # Tailwind + slideFade keyframe + body gradient + scrollbar-hide + no number spinners
   lib/
     supabase.js             # Single Supabase client (reads env vars)
-    recurrence.js           # appliesToday(rule, date) — pure helper
+    recurrence.js           # appliesToday(rule, date) + mostRecentMatch(rule, from, to) — pure helpers
+    categories.js           # CATEGORIES array [{key, label, color, addable}] — single source of truth.
+                            # ADDABLE_CATEGORIES filters out workouts (driven by fitness program).
+                            # Adding a new category here also requires ALTER TYPE task_category in Supabase.
   context/
     AuthContext.jsx         # session, user, signIn, signOut, loading
   hooks/
-    useTodaysTasks.js       # Fetch + realtime + group by category + optimistic support
+    useTodaysTasks.js       # Fetch + realtime + group by category + optimistic support.
+                            # Task visibility rules (visibilityFor):
+                            #   manual (no date, no recurrence) → always shows until checked off
+                            #   dated → shows on due_date; rolls over day-to-day if overdue & uncompleted
+                            #   recurring → shows on matching days; re-appears after next occurrence if
+                            #               completed_at < today (local). Completed today → stays visible.
+                            # Aged tasks get an aged_from ISO date (original missed day). Aged tasks sort
+                            # to front (oldest first). Fetches 30-day lookback for overdue/missed items.
     useToggleTask.js        # Optimistic toggle of completed/completed_at
+    useCreateTask.js        # Inserts a new task row into Supabase; returns { create, saving, error }
   pages/
     Login.jsx               # Email/password form, redirects to /dashboard
-    Dashboard.jsx           # Header + 4 CategoryRows
+    Dashboard.jsx           # Header + 4 CategoryRows + AddTaskFab
   components/
     AppShell.jsx            # Tab strip (Home/Fitness) + <Outlet />
-    TabNav.jsx              # Sticky top nav — adapts light/dark based on active tab
-    CategoryRow.jsx         # Label + animated pill + IndicatorDot
-    DotButton.jsx           # 62x62 circle dot per task, fills on complete
+    TabNav.jsx              # Sticky top nav — adapts light/dark based on active tab.
+                            # Refresh button (window.location.reload) far-right, visible on both tabs.
+    CategoryRow.jsx         # Label + animated pill + IndicatorDot.
+                            # Pill click = expand/collapse. Dot/task clicks stop propagation so
+                            # checking off a task never collapses the pill.
+    DotButton.jsx           # 62x62 circle dot per task. Fills on complete.
+                            # Aged (task.aged_from set, uncompleted): desaturated + dashed border.
     IndicatorDot.jsx        # 32px arrow (rotates on expand) / check (all complete)
-    TaskItem.jsx            # Row in expanded list with staggered entrance animation
+    TaskItem.jsx            # Row in expanded list with staggered entrance animation.
+                            # Aged tasks show a dark chip: 'yesterday' / 'from Tue' / '3d ago'.
+    AddTaskFab.jsx          # Floating + button (fixed bottom-right, Home only). Manages modal open state.
+    AddTaskModal.jsx        # Add-task form: category dropdown (Puppy/Tasks/Plants), title, assignee
+                            # (Grant/Ishita/Both, default Both), No-date/Specific-date toggle,
+                            # optional notes. Inserts via useCreateTask; realtime + refetch refresh dashboard.
   fitness/
     FitnessLayout.jsx       # Dark theme container (bg-zinc-950) + overflow-x-hidden + <Outlet />
     hooks/
@@ -104,23 +124,27 @@ src/
       supabaseQueries.js    # fetchActiveProgram, fetchWeeklyPlanForDate (picks latest week_start on overlap),
                             # fetchWeeklyPlanByWeekStart, fetchWorkoutLogsForDate (selects all peloton metric cols),
                             # fetchWorkoutLogsForWeek, logWorkout, upsertWorkoutLog (insert first / update by id),
-                            # updateWeeklyPlanDay (fetch-then-update single day in days JSONB)
+                            # updateWeeklyPlanDay (fetch-then-update single day in days JSONB),
+                            # chainedUpsert(promiseRef, logIdRef, payload) — serializes concurrent upserts
+                            # through a promise chain so rapid taps can't race and create duplicate rows.
     pages/
       Today.jsx             # Main fitness screen — branches by dayPlan.type:
                             #   lift → LiftingLogForm (inline, no nav)
-                            #   rest/stretch → RestDayView (BigSection-style stretch checklist, saves on tick,
-                            #                 SortableStretchList for drag-to-reorder, state restored from logs)
-                            #   cardio → CardioDayView (Morning Stretch BigSection + Peloton BigSection,
-                            #            inline inputs, 800ms debounce auto-save, state restored from logs,
-                            #            fixed bottom-right spinner/checkmark save indicator)
+                            #   rest/stretch → StretchSection (BigSection-style checklist, saves on every
+                            #                 toggle via chainedUpsert, SortableStretchList for drag-to-reorder,
+                            #                 state restored from logs)
+                            #   cardio → PelotonSection (Morning Stretch BigSection + Peloton BigSection,
+                            #            inline inputs, 800ms debounce auto-save, state restored from logs)
                             # SaveIndicator component: fixed bottom-right, spinner while saving, ✓ when done
       LiftingLog.jsx        # Collapsible BigSection cards (Morning Stretch + Workout exercises).
                             # Exports: LiftingLogForm, BigSection, RIDE_TYPES, SortableStretchList.
                             # Exercises: drag-to-reorder via @dnd-kit (grip handle when collapsed), persists order.
                             # Stretch: SortableStretchList with drag-to-reorder, name-keyed checked state.
-                            # Auto-saves on exercise collapse. No Finish button.
+                            # Auto-saves 500ms after every reps/weight/duration change (useEffect debounce).
+                            # Also saves on exercise collapse and on beforeunload/pagehide (flush).
+                            # Uses chainedUpsert to prevent duplicate rows from rapid input.
       PelotonLog.jsx        # Standalone Peloton log page at /dashboard/fitness/peloton (CP4, built).
-                            # Cardio days now also log inline via CardioDayView — this page is secondary.
+                            # Cardio days now also log inline via PelotonSection in Today — this page is secondary.
       WeekViewer.jsx        # Week view at /dashboard/fitness/week (CP5, built).
                             # Horizontal day strip with completion dots, expandable day cards,
                             # week navigation (prev/next). Uses useWeekPlan hook.
@@ -132,6 +156,19 @@ src/
       StretchChecklist.jsx  # Old-format stretch (exercises[] objects) — legacy, rarely hit
       MorningStretch.jsx    # Reusable morning stretch checklist (local state only, no save)
 ```
+
+## Task Display Logic (Household Dashboard)
+Tasks are shown based on three modes — determined at fetch time in `useTodaysTasks.js`:
+
+| Mode | Condition | Behaviour |
+|---|---|---|
+| **Manual** | `due_date IS NULL`, `recurrence IS NULL` | Always visible until checked off. No aged_from. |
+| **Dated** | `due_date` set | Shows on due_date; rolls over if overdue + uncompleted. `aged_from = due_date`. |
+| **Recurring** | `recurrence` set | Shows on matching days. Resets per-occurrence via `completed_at < today`. Missed prior occurrences roll forward with `aged_from` set. Completed today → stays visible until midnight. |
+
+**Aged tasks** (aged_from set): dot renders desaturated with a dashed border; expanded row shows a dark chip (`yesterday` / `from Tue` / `3d ago`). Aged tasks sort to the front of their category, oldest first.
+
+**Add task UI:** floating `+` FAB (bottom-right, Home only) → modal with category (Puppy/Tasks/Plants), title, assignee, No-date/Specific-date toggle, optional notes. Workouts excluded from dropdown (that row is driven by the fitness program).
 
 ## Fitness Design Spec
 - **Background:** `bg-zinc-950` (overrides body cream gradient)
@@ -149,18 +186,26 @@ src/
 - **Max width:** 520px centered
 - **Fonts:** Cormorant Garamond (headings/labels, 300/400/500) + Inter (body/dots, 400/500/600)
 - **Category colors:** Puppy `#C4724A` · Tasks `#7A6590` · Workouts `#4A8E72` · Plants `#6A9A42`
+- **Add Task modal:** cream `#F7F0E8` card, `rounded-2xl`, `border-stone-200`, `shadow-2xl`
 
 ## What's Built (Fitness)
 - **CP1–CP3:** Fitness scaffold, Today view (lift/rest/cardio/stretch), LiftingLogForm with auto-save
-- **CP4:** PelotonLog.jsx at `/dashboard/fitness/peloton` + inline Peloton logging inside CardioDayView
+- **CP4:** PelotonLog.jsx at `/dashboard/fitness/peloton` + inline Peloton logging inside Today
 - **CP5:** WeekViewer.jsx at `/dashboard/fitness/week` — horizontal strip + day expansion + week nav
 - **CP6:** MetricsBanner.jsx — Friday weight prompt + 1st-of-month full measurement form
 - **CP7:** Polish — retry handlers, 44px tap targets, timezone bug fixes, SPA 404 fix (vercel.json)
 - **Drag-to-reorder:** exercises within a lift day, stretch moves in all day types; order persists to Supabase
-- **Cardio inline logging:** no nav needed — BigSection cards for stretch + Peloton, auto-save, state restored on reload
+- **Cardio inline logging:** BigSection cards for stretch + Peloton, auto-save, state restored on reload
+- **Save reliability:** LiftingLog debounce-saves on every reps/weight change (500ms) + flush on collapse/unload; Stretch saves on every toggle including unchecks; chainedUpsert prevents duplicate rows from rapid input
+
+## What's Built (Household)
+- **Task rollover:** manual/dated/recurring tasks persist and roll over day-to-day until checked off
+- **Aged task styling:** desaturated dashed dot + "yesterday / from Tue / 3d ago" chip in expanded row
+- **Refresh button:** persistent ↺ icon far-right of TabNav, both Home and Fitness (`window.location.reload`)
+- **Add Task UI:** floating + FAB → modal (category, title, assignee, date toggle, notes) → inserts to Supabase
 
 ## What's Not Built Yet (Household)
-- Task creation / editing UI (tasks added via Supabase dashboard for now)
+- Task editing / deletion UI (edit via Supabase dashboard for now)
 - Calendar events UI (table exists, no frontend)
 - Plans UI (table exists, no frontend)
 - Sign-up flow (not needed — manual user creation)
