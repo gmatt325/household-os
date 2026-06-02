@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTodaysPlan } from '../hooks/useTodaysPlan.js'
 import { useFitnessProgram } from '../hooks/useFitnessProgram.js'
 import { formatDayLabel } from '../lib/date.js'
-import { upsertWorkoutLog, updateWeeklyPlanDay } from '../lib/supabaseQueries.js'
+import { upsertWorkoutLog, updateWeeklyPlanDay, chainedUpsert } from '../lib/supabaseQueries.js'
 import { getActivities, replaceActivity, KIND_STRETCH, KIND_LIFT, KIND_PELOTON } from '../lib/dayShape.js'
 import { LiftingLogForm, BigSection, RIDE_TYPES, SortableStretchList } from './LiftingLog.jsx'
 
@@ -32,16 +32,16 @@ function StretchSection({ activity, dayPlan, weeklyPlan, program, today, logs })
   const [saveStatus, setSaveStatus] = useState(null)
   const logIdRef = useRef(stretchLog?.id ?? null)
   const saveTimer = useRef(null)
+  const savePromiseRef = useRef(null)
 
   async function handleToggle(moveName) {
     const next = { ...checked, [moveName]: !checked[moveName] }
     setChecked(next)
     const completedMoves = moves.filter((m) => next[m])
-    if (!completedMoves.length) return
     setSaveStatus('saving')
     clearTimeout(saveTimer.current)
     try {
-      logIdRef.current = await upsertWorkoutLog(logIdRef.current, {
+      await chainedUpsert(savePromiseRef, logIdRef, {
         program_id: program?.id ?? null,
         weekly_plan_id: weeklyPlan?.id ?? null,
         workout_date: today,

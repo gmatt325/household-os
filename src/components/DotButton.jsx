@@ -1,5 +1,6 @@
 export default function DotButton({ task, onToggle, readOnly }) {
   const checked = !!task.completed
+  const aged = !!task.aged_from && !checked
   return (
     <button
       type="button"
@@ -8,6 +9,7 @@ export default function DotButton({ task, onToggle, readOnly }) {
         if (!readOnly) onToggle?.(task)
       }}
       className={`relative shrink-0 w-[62px] h-[62px] rounded-full border border-white/80 bg-white/[0.18] overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 ${readOnly ? 'cursor-default' : ''}`}
+      style={aged ? { filter: 'saturate(0.55) brightness(0.92)', borderStyle: 'dashed' } : undefined}
       aria-pressed={checked}
       aria-label={task.title}
     >

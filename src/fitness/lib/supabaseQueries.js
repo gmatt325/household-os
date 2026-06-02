@@ -123,6 +123,18 @@ export async function updateWeeklyPlanDays(weeklyPlanId, dayUpdates) {
   if (error) throw error
 }
 
+// Serializes upsertWorkoutLog calls through a shared promise chain so concurrent
+// toggles/typings can't race and create duplicate rows. logIdRef tracks the
+// server-assigned id between calls.
+export function chainedUpsert(promiseRef, logIdRef, payload) {
+  const next = (promiseRef.current ?? Promise.resolve()).then(async () => {
+    logIdRef.current = await upsertWorkoutLog(logIdRef.current, payload)
+    return logIdRef.current
+  })
+  promiseRef.current = next.catch(() => {})
+  return next
+}
+
 // Insert on first call (id=null), update on subsequent calls. Returns the id.
 export async function upsertWorkoutLog(id, payload) {
   if (id) {

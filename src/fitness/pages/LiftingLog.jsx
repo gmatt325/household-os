@@ -1,10 +1,10 @@
-import { useReducer, useState, useRef, useCallback } from 'react'
+import { useReducer, useState, useRef, useCallback, useEffect } from 'react'
 import { DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useTodaysPlan } from '../hooks/useTodaysPlan.js'
 import { useFitnessProgram } from '../hooks/useFitnessProgram.js'
-import { upsertWorkoutLog, completeWorkoutTasksForToday, updateWeeklyPlanDay } from '../lib/supabaseQueries.js'
+import { upsertWorkoutLog, completeWorkoutTasksForToday, updateWeeklyPlanDay, chainedUpsert } from '../lib/supabaseQueries.js'
 import { getActivities, replaceActivity, KIND_LIFT } from '../lib/dayShape.js'
 import SetRow from '../components/SetRow.jsx'
 
@@ -256,6 +256,8 @@ export function LiftingLogForm({ liftActivity, dayPlan, weeklyPlan, program, tod
 
   const [saveStatus, setSaveStatus] = useState(null) // null | 'saving' | 'saved' | 'error'
   const saveTimer = useRef(null)
+  const debounceTimer = useRef(null)
+  const savePromiseRef = useRef(null)
 
   const workoutDone = exercises.length > 0 && exercises.every(isExDone)
 
@@ -265,7 +267,7 @@ export function LiftingLogForm({ liftActivity, dayPlan, weeklyPlan, program, tod
     setSaveStatus('saving')
     clearTimeout(saveTimer.current)
     try {
-      logIdRef.current = await upsertWorkoutLog(logIdRef.current, {
+      await chainedUpsert(savePromiseRef, logIdRef, {
         program_id: program?.id ?? null,
         weekly_plan_id: weeklyPlan?.id ?? null,
         workout_date: today,
@@ -278,6 +280,34 @@ export function LiftingLogForm({ liftActivity, dayPlan, weeklyPlan, program, tod
       setSaveStatus('error')
     }
   }, [program, weeklyPlan, today, label])
+
+  // Debounced auto-save on every change to exercises (reps / weight / duration).
+  useEffect(() => {
+    clearTimeout(debounceTimer.current)
+    debounceTimer.current = setTimeout(() => {
+      saveCurrentState(exercises)
+      if (exercises.length > 0 && exercises.every(isExDone)) {
+        completeWorkoutTasksForToday().catch(() => {})
+      }
+    }, 500)
+    return () => clearTimeout(debounceTimer.current)
+  }, [exercises, saveCurrentState])
+
+  // Best-effort flush if the tab is closed mid-edit.
+  useEffect(() => {
+    function flush() {
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current)
+        saveCurrentState(exercises)
+      }
+    }
+    window.addEventListener('beforeunload', flush)
+    window.addEventListener('pagehide', flush)
+    return () => {
+      window.removeEventListener('beforeunload', flush)
+      window.removeEventListener('pagehide', flush)
+    }
+  }, [exercises, saveCurrentState])
 
   const handleDragEnd = useCallback(async (event) => {
     const { active, over } = event

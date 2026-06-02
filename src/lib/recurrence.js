@@ -27,3 +27,17 @@ export function appliesToday(recurrence, date = new Date()) {
   }
   return false
 }
+
+// Walks backward day by day from `to` (inclusive) to `from` (inclusive),
+// returning the latest Date where the rule matches, or null. Both bounds are
+// local Dates (time-of-day is ignored).
+export function mostRecentMatch(recurrence, from, to) {
+  if (!recurrence) return null
+  const start = new Date(from.getFullYear(), from.getMonth(), from.getDate())
+  const cursor = new Date(to.getFullYear(), to.getMonth(), to.getDate())
+  while (cursor >= start) {
+    if (appliesToday(recurrence, cursor)) return new Date(cursor)
+    cursor.setDate(cursor.getDate() - 1)
+  }
+  return null
+}
