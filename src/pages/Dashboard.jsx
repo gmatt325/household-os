@@ -4,13 +4,8 @@ import { useTodaysTasks } from '../hooks/useTodaysTasks.js'
 import { useToggleTask } from '../hooks/useToggleTask.js'
 import { useTodaysFitnessVirtualTasks } from '../fitness/hooks/useTodaysFitnessVirtualTasks.js'
 import CategoryRow from '../components/CategoryRow.jsx'
-
-const ROWS = [
-  { key: 'puppy', label: 'Puppy', color: '#C4724A' },
-  { key: 'todos', label: 'Tasks', color: '#7A6590' },
-  { key: 'workouts', label: 'Workouts', color: '#4A8E72' },
-  { key: 'plant_watering', label: 'Plants', color: '#6A9A42' },
-]
+import AddTaskFab from '../components/AddTaskFab.jsx'
+import { CATEGORIES as ROWS } from '../lib/categories.js'
 
 function formatDate(d = new Date()) {
   return d.toLocaleDateString(undefined, {
@@ -22,7 +17,7 @@ function formatDate(d = new Date()) {
 
 export default function Dashboard() {
   const { user, signOut } = useAuth()
-  const { tasks, loading, error, setOptimistic, clearOptimistic } =
+  const { tasks, loading, error, setOptimistic, clearOptimistic, refetch } =
     useTodaysTasks()
   const toggle = useToggleTask({ setOptimistic, clearOptimistic })
   const { parents: fitnessParents, childrenByParentId, hasPlan } =
@@ -82,6 +77,8 @@ export default function Dashboard() {
           })}
         </div>
       </div>
+
+      <AddTaskFab onAdded={refetch} />
     </div>
   )
 }
