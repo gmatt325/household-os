@@ -8,6 +8,8 @@ import Today from './fitness/pages/Today.jsx'
 import LiftingLog from './fitness/pages/LiftingLog.jsx'
 import PelotonLog from './fitness/pages/PelotonLog.jsx'
 import WeekViewer from './fitness/pages/WeekViewer.jsx'
+import PuppyLayout from './puppy/PuppyLayout.jsx'
+import Puppy from './puppy/pages/Puppy.jsx'
 
 function ProtectedRoute({ children }) {
   const { session, loading } = useAuth()
@@ -56,6 +58,9 @@ export default function App() {
           <Route path="lift" element={<LiftingLog />} />
           <Route path="peloton" element={<PelotonLog />} />
           <Route path="week" element={<WeekViewer />} />
+        </Route>
+        <Route path="puppy" element={<PuppyLayout />}>
+          <Route index element={<Puppy />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
