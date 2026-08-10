@@ -1,4 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom'
+import { useNightMode } from '../puppy/lib/nightMode.js'
 
 function RefreshIcon() {
   return (
@@ -11,44 +12,68 @@ function RefreshIcon() {
   )
 }
 
+// Per-route theme. Puppy has a warm palette in day mode and flips dark at night.
+function themeFor(pathname, night) {
+  if (pathname.startsWith('/dashboard/fitness')) {
+    return {
+      nav: 'bg-zinc-950 border-zinc-800',
+      active: 'border-white text-white',
+      inactive: 'border-transparent text-zinc-500 hover:text-zinc-300',
+      refresh: 'text-zinc-400 hover:text-zinc-200',
+    }
+  }
+  if (pathname.startsWith('/dashboard/puppy')) {
+    return night
+      ? {
+          nav: 'bg-pup-nightbg border-pup-nightline',
+          active: 'border-pup-accent text-pup-nightink',
+          inactive: 'border-transparent text-zinc-500 hover:text-zinc-300',
+          refresh: 'text-zinc-500 hover:text-zinc-300',
+        }
+      : {
+          nav: 'bg-pup-bg/95 backdrop-blur border-pup-line',
+          active: 'border-pup-accent text-pup-ink',
+          inactive: 'border-transparent text-pup-muted hover:text-pup-ink',
+          refresh: 'text-pup-muted hover:text-pup-ink',
+        }
+  }
+  return {
+    nav: 'bg-white/95 backdrop-blur border-stone-200',
+    active: 'border-stone-700 text-stone-700',
+    inactive: 'border-transparent text-stone-400 hover:text-stone-600',
+    refresh: 'text-stone-400 hover:text-stone-700',
+  }
+}
+
 export default function TabNav() {
   const { pathname } = useLocation()
-  const dark = pathname.startsWith('/dashboard/fitness')
+  const [night] = useNightMode()
+  const t = themeFor(pathname, night)
 
   const base =
-    'px-6 py-3 text-xs uppercase tracking-widest font-sans border-b-2 transition-colors'
-  const active = dark
-    ? 'border-white text-white'
-    : 'border-stone-700 text-stone-700'
-  const inactive = dark
-    ? 'border-transparent text-zinc-500 hover:text-zinc-300'
-    : 'border-transparent text-stone-400 hover:text-stone-600'
-
-  const refreshClass = dark
-    ? 'text-zinc-400 hover:text-zinc-200'
-    : 'text-stone-400 hover:text-stone-700'
+    'px-5 py-3 text-xs uppercase tracking-widest font-sans border-b-2 transition-colors'
 
   return (
-    <nav
-      className={`sticky top-0 z-20 flex items-stretch border-b ${
-        dark
-          ? 'bg-zinc-950 border-zinc-800'
-          : 'bg-white/95 backdrop-blur border-stone-200'
-      }`}
-    >
+    <nav className={`sticky top-0 z-20 flex items-stretch border-b ${t.nav}`}>
       <div className="flex flex-1">
         <NavLink
           to="/dashboard"
           end
-          className={({ isActive }) => `${base} ${isActive ? active : inactive}`}
+          className={({ isActive }) => `${base} ${isActive ? t.active : t.inactive}`}
         >
           Home
         </NavLink>
         <NavLink
           to="/dashboard/fitness"
-          className={({ isActive }) => `${base} ${isActive ? active : inactive}`}
+          className={({ isActive }) => `${base} ${isActive ? t.active : t.inactive}`}
         >
           Fitness
+        </NavLink>
+        <NavLink
+          to="/dashboard/puppy"
+          className={({ isActive }) => `${base} ${isActive ? t.active : t.inactive}`}
+        >
+          Puppy
         </NavLink>
       </div>
       <button
@@ -56,7 +81,7 @@ export default function TabNav() {
         onClick={() => window.location.reload()}
         aria-label="Refresh"
         title="Refresh"
-        className={`flex items-center justify-center min-w-[44px] min-h-[44px] px-4 transition-colors ${refreshClass}`}
+        className={`flex items-center justify-center min-w-[44px] min-h-[44px] px-4 transition-colors ${t.refresh}`}
       >
         <RefreshIcon />
       </button>

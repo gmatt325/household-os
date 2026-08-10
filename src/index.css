@@ -51,3 +51,29 @@ body {
   animation: slideFade 320ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
   animation-delay: calc(var(--i, 0) * 45ms);
 }
+
+/* Puppy tab: gentle pulse on an overdue progress ring */
+@keyframes pupPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* Puppy tab: paw-print celebration burst (per-paw --tx/--ty/--rot) */
+@keyframes pawBurst {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.4) rotate(0deg);
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tx, 0), var(--ty, -80px)) scale(1.1) rotate(var(--rot, 0deg));
+  }
+}
