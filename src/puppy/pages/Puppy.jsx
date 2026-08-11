@@ -8,11 +8,14 @@ import { formatElapsed, formatClock, todayISO } from '../lib/date.js'
 import { logEvent, deleteEvent, openSession, closeSession } from '../lib/supabaseQueries.js'
 import PuppyCard from '../components/PuppyCard.jsx'
 import LocationChooser from '../components/LocationChooser.jsx'
-import DetailSheet from '../components/DetailSheet.jsx'
+import LogSheet from '../components/LogSheet.jsx'
 import WeightSheet from '../components/WeightSheet.jsx'
 import ProfileSheet from '../components/ProfileSheet.jsx'
 import UndoSnackbar from '../components/UndoSnackbar.jsx'
 import TodayCard from '../components/TodayCard.jsx'
+import SleepCard from '../components/SleepCard.jsx'
+import FoodCard from '../components/FoodCard.jsx'
+import MealSheet from '../components/MealSheet.jsx'
 import PawBurst from '../components/PawBurst.jsx'
 import WeightPrompt from '../components/WeightPrompt.jsx'
 
@@ -34,8 +37,9 @@ export default function Puppy() {
   const { rows } = usePuppyDaily(7)
 
   const [chooser, setChooser] = useState(null) // { type, label }
-  const [detail, setDetail] = useState(null) // { event, label }
+  const [logCard, setLogCard] = useState(null) // card object for the long-press LogSheet
   const [weightOpen, setWeightOpen] = useState(false)
+  const [mealOpen, setMealOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [undo, setUndo] = useState(null) // { id, label, at }
   const [burst, setBurst] = useState(0) // bump to replay the paw-burst; 0 = hidden
@@ -81,6 +85,10 @@ export default function Puppy() {
       setWeightOpen(true)
       return
     }
+    if (card.type === 'meal') {
+      setMealOpen(true)
+      return
+    }
     if (card.chooseLocation) {
       setChooser({ type: card.type, label: card.label })
       return
@@ -89,10 +97,8 @@ export default function Puppy() {
   }
 
   function handleLongPress(card) {
-    if (card.kind === 'event') {
-      const last = live.lastByType[card.type]
-      if (last) setDetail({ event: last, label: card.label })
-    }
+    // Long-press any card → backdate/log sheet (also edits the most recent entry).
+    setLogCard(card)
   }
 
   // Derive the display props for a card from live data + the ticking clock.
@@ -236,7 +242,9 @@ export default function Puppy() {
           </div>
 
           {!night && (
-            <div className="mt-6">
+            <div className="mt-6 space-y-4">
+              <SleepCard sessions={live.sessions} now={now} />
+              <FoodCard events={live.events} now={now} />
               <TodayCard today={todayRow} rows={rows} />
             </div>
           )}
@@ -258,13 +266,17 @@ export default function Puppy() {
           }}
         />
       )}
-      {detail && (
-        <DetailSheet
-          event={detail.event}
-          label={detail.label}
+      {logCard && (
+        <LogSheet
+          key={`${logCard.kind}-${logCard.type}`}
+          card={logCard}
+          lastEvent={live.lastByType[logCard.type] ?? null}
+          lastSession={live.lastSessionByType?.[logCard.type] ?? null}
+          openSession={live.openByType[logCard.type] ?? null}
           night={night}
-          onClose={() => setDetail(null)}
+          onClose={() => setLogCard(null)}
           onChanged={refetch}
+          onCelebrate={celebrate}
         />
       )}
       {weightOpen && (
@@ -273,6 +285,16 @@ export default function Puppy() {
           onClose={() => setWeightOpen(false)}
           onLogged={(row) => {
             setUndo({ id: row.id, label: 'Weight', at: row.occurred_at })
+            refetch()
+          }}
+        />
+      )}
+      {mealOpen && (
+        <MealSheet
+          night={night}
+          onClose={() => setMealOpen(false)}
+          onLogged={(row) => {
+            setUndo({ id: row.id, label: 'Meal', at: row.occurred_at })
             refetch()
           }}
         />

@@ -5,6 +5,7 @@
 // common house-training rule of thumb: a pup can hold it roughly 1 hour per month
 // of age. We fall back to the seeded value when there's no DOB.
 
+// Whole completed months (for display, e.g. "1 month old").
 export function ageInMonths(dob) {
   if (!dob) return null
   const birth = new Date(dob + 'T12:00:00')
@@ -16,12 +17,21 @@ export function ageInMonths(dob) {
   return Math.max(0, months)
 }
 
-// ~60 min per month of age, clamped to a sane range. Overdue = target * 1.33.
+// Fractional age in months (days ÷ 30.44) — smooth ramp for the pee target so an
+// ~8.5-week pup reads ~2h instead of snapping in whole-hour steps on her birthday.
+export function ageInMonthsFractional(dob) {
+  if (!dob) return null
+  const birth = new Date(dob + 'T12:00:00')
+  const days = (Date.now() - birth.getTime()) / 86400000
+  return Math.max(0, days / 30.4375)
+}
+
+// ~60 min per month of age (fractional), clamped to a sane range. Overdue = target * 1.33.
 // Returns { target_minutes, overdue_minutes } or null when DOB unknown.
 export function dynamicPeeTarget(dob) {
-  const months = ageInMonths(dob)
+  const months = ageInMonthsFractional(dob)
   if (months == null) return null
-  const target = Math.min(240, Math.max(45, months * 60))
+  const target = Math.round(Math.min(240, Math.max(45, months * 60)))
   return { target_minutes: target, overdue_minutes: Math.round(target * 1.33) }
 }
 

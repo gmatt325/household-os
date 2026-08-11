@@ -73,7 +73,7 @@ export default function TabNav() {
           to="/dashboard/puppy"
           className={({ isActive }) => `${base} ${isActive ? t.active : t.inactive}`}
         >
-          Puppy
+          Poppy
         </NavLink>
       </div>
       <button
