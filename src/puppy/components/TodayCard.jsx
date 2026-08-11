@@ -57,7 +57,6 @@ export default function TodayCard({ today, rows }) {
           <Chip emoji="💩" value={today?.poop_count ?? 0} />
           <Chip emoji="⚠️" value={today?.accident_count ?? 0} warn={(today?.accident_count ?? 0) > 0} />
           <Chip emoji="🍽️" value={today?.meal_count ?? 0} />
-          <Chip emoji="🛏️" value={`${today?.crate_minutes ?? 0}m`} />
         </div>
       </div>
 

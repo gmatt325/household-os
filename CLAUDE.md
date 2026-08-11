@@ -43,7 +43,7 @@ A **Puppy tab** also lives alongside — real-time puppy care logging (potty/mea
 
 **Puppy (all have RLS enabled with `authenticated` select/insert/update/delete policies):**
 - `puppy_profile` — id, name, dob, target_weight_lbs, vet_name, vet_phone, notes, created_at. Single row; `dob` drives the dynamic pee target.
-- `puppy_events` — id, event_type (`puppy_event_type`), occurred_at (editable, for backdate), detail (JSONB), notes, created_at. `detail` conventions: pee/poop → `{ "location": "pad" | "street" | "indoor_accident" }` (indoor_accident = failure; pad/street = success); meal → `{ "grams": 45 }`; weight → `{ "lbs": 4.2 }`.
+- `puppy_events` — id, event_type (`puppy_event_type`), occurred_at (editable, for backdate), detail (JSONB), notes, created_at. `detail` conventions: pee/poop → `{ "location": "pad" | "street" | "indoor_accident" }` (indoor_accident = failure; pad/street = success); meal → `{ "made_cups": 0.1667, "ate_pct": 75 }` (older meals may have `{ "grams": 45 }`); weight → `{ "lbs": 4.2 }`.
 - `puppy_sessions` — id, session_type (`puppy_session_type`: crate | alone | walk), started_at, ended_at (null = in progress), alone (bool), notes, created_at. Partial unique index `puppy_sessions_one_open_per_type` enforces at most one open session per type. Crate, Alone, and Walk are all start/stop timers.
 - `puppy_targets` — id, event_type (text), target_minutes (→ amber), overdue_minutes (→ red), active. Seeded: pee 90/120, poop 240/360, meal 240/300, crate 120/180, weight 10080/10080. Pee is overridden dynamically from age in the client (`~60 min per month of age`).
 
@@ -178,9 +178,14 @@ src/
       date.js               # todayISO, formatElapsed (count-up label), formatClock, toDatetimeLocal, weekdayShort
       targets.js            # ageInMonths, dynamicPeeTarget (~60min/month), resolveTargets (seed + pee override),
                             # statusFor → ok|amber|red, progressFor → 0..1 ring fill, smartStatus → header line
+      sleep.js              # buildSleepDay(sessions, nowMs) — asleep(=in crate)/awake breakdown for today,
+                            # 10-min segments merged into runs over a fixed 24h track (resets at local midnight)
       supabaseQueries.js    # fetchProfile/upsertProfile, fetchTargets, fetchLive (last-event-per-type +
-                            # open sessions + last closed crate), logEvent, updateEvent (backdate), deleteEvent
-                            # (undo), openSession/closeSession, fetchDaily (v_puppy_daily, N days)
+                            # open sessions + lastSessionByType + last closed crate + raw events/sessions
+                            # arrays for the sleep bar & food volume), logEvent (accepts occurredAt for
+                            # backdating), updateEvent, deleteEvent, openSession/closeSession,
+                            # logSession (backdated start + optional end), updateSession, deleteSession,
+                            # fetchDaily (v_puppy_daily, N days)
     hooks/
       usePuppyLive.js       # profile + targets + live snapshot; realtime subscribe→refetch on
                             # puppy_events/puppy_sessions/puppy_profile (same pattern as useTodaysTasks)
@@ -189,21 +194,29 @@ src/
     pages/
       Puppy.jsx             # Index. Ordered card grid (Pee/Poop/Meal/Crate/Alone/Walk/Weight). Tap = log
                             # (pee/poop → LocationChooser, weight → WeightSheet, session → open/close toggle).
-                            # Long-press event card → DetailSheet. Header shows a smart status line
-                            # (smartStatus). Successful potty (pad/street) fires a PawBurst (day mode).
-                            # Below grid: single TodayCard. Night mode: only Pee/Poop/Crate, big cards, no TodayCard/prompt.
+                            # (meal tap → MealSheet). Long-press any card → LogSheet (backdate + edit/delete).
+                            # Header shows a smart status line (smartStatus). Successful potty (pad/street) fires a
+                            # PawBurst (day mode). Below grid (day only): SleepCard → FoodCard → TodayCard.
+                            # Night mode: only Pee/Poop/Crate, big cards, no bottom cards/prompt.
     components/
       PuppyCard.jsx         # Big tap target; pointer tap vs 500ms long-press. Emoji sits in a progress
                             # ring (ProgressRing) that fills toward the overdue point, green→amber→red,
                             # accent + full ring when a session is active, pulses when overdue.
-      LocationChooser.jsx   # 3-button Pad/Street/Accident sheet; × / backdrop cancels (nothing logged)
-                            # (crate/alone/walk sessions have no dedicated component — handled inline in Puppy.jsx)
-      DetailSheet.jsx       # Edit time (backdate) / notes / delete an event
+      LocationChooser.jsx   # 3-button Pad/Street/Accident sheet; × / backdrop cancels (nothing logged).
+                            # Exports LocationButtons (the shared button group) + LOCATION_OPTIONS.
+      LogSheet.jsx          # Long-press sheet: top logs a NEW backdated entry at a chosen time (potty uses
+                            # LocationButtons; meal grams; weight lbs; sessions = start + optional end, with a
+                            # one-open-per-type guard); bottom edits time/notes (events) or start/end (sessions)
+                            # of the most recent entry, or deletes it. Works for every card. Replaces DetailSheet.
       WeightSheet.jsx       # Log a weight event ({ lbs }) — used by card + weekly prompt
+      MealSheet.jsx         # Tap-Meal sheet: cups made (default 1/6) + % eaten (default 100) → { made_cups, ate_pct }.
+                            # Exports MealFields (shared with LogSheet backdate) + DEFAULT_MADE_CUPS/ATE_PCT.
       ProfileSheet.jsx      # Edit puppy_profile (name/dob/target wt/vet); dob drives dynamic pee target
       WeightPrompt.jsx      # Dismissible weekly weigh-in nudge (>7d old); per-day localStorage dismiss
       UndoSnackbar.jsx      # Persistent "Last: Pee, 2m ago — undo" → deleteEvent
-      TodayCard.jsx         # Merged rollup + trend: big success %, icon-chip counts, 7-day bars (day only)
+      SleepCard.jsx         # Asleep(=in crate)/awake totals + fixed 24h track bar (dark/light blue, now marker)
+      FoodCard.jsx          # Today's food volume: cups eaten (Σ made_cups·ate_pct) of cups made · N meals
+      TodayCard.jsx         # Potty rollup + trend: big success %, 💧💩⚠️🍽️ chips, 7-day bars (day only)
       PawBurst.jsx          # Paw-print celebration overlay (pawBurst keyframe); self-unmounts ~1s
       Sheet.jsx             # Shared bottom-sheet primitive (backdrop + rounded-top, day/night themed)
 ```
@@ -242,7 +255,8 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
 ## Puppy Design Spec
 - **Day background:** `#FBF4EA` (warm cream). **Night background:** `#161210` (warm near-black).
 - **Palette tokens (`pup.*`):** `accent #E0894B`, `ink #4A3B30`, `muted #A0917F`, `line #EADFD1`,
-  `ok #7BA86A`, `amber #E0A23B`, `red #D8664A`; night: `nightbg/nightcard/nightink/nightline`.
+  `ok #7BA86A`, `amber #E0A23B`, `red #D8664A`, `sleep #2B4C7E` (dark blue), `awake #AFCDEC` (light blue);
+  night: `nightbg/nightcard/nightink/nightline`.
 - **Cards:** `rounded-2xl border-2`, min-h 120px (140px in night mode). Emoji sits inside a progress
   ring (SVG, ~56px / 64px in night) that fills toward the overdue point and colors ok/amber/red;
   active session = full accent ring; overdue = `pupPulse` animation. Status border reinforces the ring.
@@ -264,7 +278,12 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
 - **Smart header line:** one contextual sentence ("Next pee in ~20m" / "On a walk — 12m in 🐾").
 - **Win celebration:** a paw-print burst plays when a successful potty (pad/street) is logged (day mode).
 - **Undo:** persistent "Last: X, Nm ago — undo" snackbar deletes the last logged event.
-- **Backdate/edit:** long-press an event card → edit time/notes or delete.
+- **Backdate/edit (LogSheet):** long-press any card → log a new entry at a chosen past time (potty picks
+  Pad/Street/Accident; sessions take start + optional end) and/or edit-time/delete the most recent entry.
+- **Sleep tracker:** asleep(=in crate)/awake totals for the day + a fixed 24h bar that fills dark-blue
+  (asleep) / light-blue (awake) in 10-min segments, growing to a "now" marker; resets at local midnight.
+- **Food logging:** tapping Meal asks cups made (default 1/6) + % she ate; a Food card sums the day's
+  volume eaten (Σ made_cups·ate_pct) — meal `detail` is `{ made_cups, ate_pct }`.
 - **Today card:** one merged card — big potty-success %, icon-chip counts, 7-day success-rate bars.
 - **Weekly weigh-in nudge:** dismissible banner when latest weight is >7 days old.
 - **Profile editor:** in-app sheet for name/DOB/target weight/vet (no seeding — user fills it in).

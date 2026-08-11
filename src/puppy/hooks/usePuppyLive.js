@@ -9,7 +9,7 @@ import { fetchLive, fetchProfile, fetchTargets } from '../lib/supabaseQueries.js
 export function usePuppyLive() {
   const [profile, setProfile] = useState(null)
   const [targets, setTargets] = useState([])
-  const [live, setLive] = useState({ lastByType: {}, openByType: {}, lastClosedCrate: null })
+  const [live, setLive] = useState({ lastByType: {}, openByType: {}, lastSessionByType: {}, lastClosedCrate: null, events: [], sessions: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 

@@ -23,6 +23,8 @@ export default {
           ok: '#7BA86A',
           amber: '#E0A23B',
           red: '#D8664A',
+          sleep: '#2B4C7E',
+          awake: '#AFCDEC',
           nightbg: '#161210',
           nightcard: '#221B17',
           nightink: '#F3E9DE',

@@ -48,7 +48,7 @@ export async function fetchTargets() {
 // closed crate session (for the "out of crate" nap timer). The client ticks
 // elapsed/status from these so cards count up without re-querying.
 export async function fetchLive() {
-  const [lastEventsRes, openSessRes, lastCrateRes] = await Promise.all([
+  const [lastEventsRes, openSessRes, recentSessRes] = await Promise.all([
     supabase
       .from('puppy_events')
       .select('id, event_type, occurred_at, detail, notes')
@@ -61,14 +61,12 @@ export async function fetchLive() {
     supabase
       .from('puppy_sessions')
       .select('*')
-      .eq('session_type', 'crate')
-      .not('ended_at', 'is', null)
-      .order('ended_at', { ascending: false })
-      .limit(1),
+      .order('started_at', { ascending: false })
+      .limit(100),
   ])
   if (lastEventsRes.error) throw lastEventsRes.error
   if (openSessRes.error) throw openSessRes.error
-  if (lastCrateRes.error) throw lastCrateRes.error
+  if (recentSessRes.error) throw recentSessRes.error
 
   const lastByType = {}
   for (const row of lastEventsRes.data ?? []) {
@@ -77,10 +75,22 @@ export async function fetchLive() {
   const openByType = {}
   for (const s of openSessRes.data ?? []) openByType[s.session_type] = s
 
+  // Most recent session per type (open or closed) — feeds the edit/delete UI.
+  // Rows are already started_at desc, so the first seen per type is newest.
+  const lastSessionByType = {}
+  let lastClosedCrate = null
+  for (const s of recentSessRes.data ?? []) {
+    if (!lastSessionByType[s.session_type]) lastSessionByType[s.session_type] = s
+    if (!lastClosedCrate && s.session_type === 'crate' && s.ended_at) lastClosedCrate = s
+  }
+
   return {
     lastByType,
     openByType,
-    lastClosedCrate: lastCrateRes.data?.[0] ?? null,
+    lastSessionByType,
+    lastClosedCrate,
+    events: lastEventsRes.data ?? [], // raw recent events (for food volume, etc.)
+    sessions: recentSessRes.data ?? [], // raw recent sessions (for the sleep timeline)
   }
 }
 
@@ -147,6 +157,36 @@ export async function closeSession(id) {
     .single()
   if (error) throw error
   return data
+}
+
+// Backdated session create: explicit started_at, optional ended_at (null = still
+// running). The partial unique index still forbids a 2nd open session per type.
+export async function logSession(sessionType, startedAt, endedAt = null, alone = false) {
+  const payload = { session_type: sessionType, started_at: startedAt, alone }
+  if (endedAt) payload.ended_at = endedAt
+  const { data, error } = await supabase
+    .from('puppy_sessions')
+    .insert([payload])
+    .select('*')
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function updateSession(id, patch) {
+  const { data, error } = await supabase
+    .from('puppy_sessions')
+    .update(patch)
+    .eq('id', id)
+    .select('*')
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteSession(id) {
+  const { error } = await supabase.from('puppy_sessions').delete().eq('id', id)
+  if (error) throw error
 }
 
 // ---- Daily rollup + trend (v_puppy_daily) ----
