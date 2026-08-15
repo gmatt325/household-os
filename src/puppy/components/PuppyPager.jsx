@@ -14,23 +14,48 @@ export default function PuppyPager({ labels, children }) {
   const [index, setIndex] = useState(0)
   const [height, setHeight] = useState(null)
   const settled = useRef(0)
+  const scrolling = useRef(false)
+  const scrollEndTimer = useRef(null)
 
   const pages = Array.isArray(children) ? children : [children]
   const count = pages.length
 
-  const measure = useCallback(() => {
+  const activeIndex = useCallback(() => {
     const el = scrollRef.current
-    if (!el) return
+    if (!el) return 0
     const width = el.clientWidth || 1
-    const active = Math.round(Math.min(count - 1, Math.max(0, el.scrollLeft / width)))
-    const h = pageRefs.current[active]?.offsetHeight ?? 0
-    if (h) setHeight(h)
-    setIndex(active)
+    return Math.round(Math.min(count - 1, Math.max(0, el.scrollLeft / width)))
   }, [count])
 
   // Re-measure after every render — pages change height as data loads and as the
-  // clock ticks. setState bails out when the value is unchanged.
+  // clock ticks. setState bails out when the value is unchanged. Skipped while a
+  // swipe is in flight: the two pages differ a lot in height, and resizing the
+  // element the finger (or momentum scroll) is actively driving mid-gesture is
+  // what causes iOS Safari to render a torn/undersized frame during the swipe.
+  const measure = useCallback(() => {
+    const active = activeIndex()
+    setIndex(active)
+    if (scrolling.current) return
+    const h = pageRefs.current[active]?.offsetHeight
+    if (h) setHeight(h)
+  }, [activeIndex])
+
   useLayoutEffect(measure)
+
+  // The dot/index feedback can track the scroll live (cheap, no layout impact).
+  // The height commit waits for the gesture to go quiet for a beat — covers
+  // both touch swipes and goTo's programmatic smooth-scroll.
+  const handleScroll = useCallback(() => {
+    scrolling.current = true
+    setIndex(activeIndex())
+    if (scrollEndTimer.current) clearTimeout(scrollEndTimer.current)
+    scrollEndTimer.current = setTimeout(() => {
+      scrolling.current = false
+      measure()
+    }, 150)
+  }, [activeIndex, measure])
+
+  useEffect(() => () => clearTimeout(scrollEndTimer.current), [])
 
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return
@@ -72,7 +97,7 @@ export default function PuppyPager({ labels, children }) {
       {/* Full-bleed: cancel PuppyLayout's padding, re-apply it per page */}
       <div
         ref={scrollRef}
-        onScroll={measure}
+        onScroll={handleScroll}
         style={height ? { height } : undefined}
         className="-mx-4 flex snap-x snap-mandatory items-start overflow-x-auto overflow-y-hidden overscroll-x-contain transition-[height] duration-200 md:-mx-6"
       >
