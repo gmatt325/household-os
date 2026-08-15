@@ -52,7 +52,9 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Dashboard />} />
+        {/* Poppy is the default landing tab; Home lives at /dashboard/home. */}
+        <Route index element={<Navigate to="puppy" replace />} />
+        <Route path="home" element={<Dashboard />} />
         <Route path="fitness" element={<FitnessLayout />}>
           <Route index element={<Today />} />
           <Route path="lift" element={<LiftingLog />} />

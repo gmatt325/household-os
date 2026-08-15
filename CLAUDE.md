@@ -5,7 +5,7 @@ Shared daily task dashboard for two people (Grant & Ishita). Tasks are grouped i
 
 A **Fitness tab** lives alongside the Home tab — dark gym-logbook aesthetic, mobile-first, single user (no per-user separation needed).
 
-A **Puppy tab** also lives alongside — real-time puppy care logging (potty/meals/crate/walks/weight). Its own warm cream palette in day mode, plus a manual dark night mode. Big-tap-target card grid with live count-up timers, age-tuned amber/red thresholds, house-training rollup + 7-day trend. Two phones log concurrently via realtime.
+A **Puppy tab** also lives alongside — real-time puppy care logging (potty/meals/crate/walks/weight). It is the **default landing tab** (`/dashboard` redirects to it; Home moved to `/dashboard/home`). Its own warm cream palette in day mode, plus a dark night mode that switches automatically on the device clock (22:00–06:00). Full-width tap tiles with live count-up timers, age-tuned amber/red thresholds, a swipeable sleep/day-timeline pager, house-training rollup + 7-day trend. Two phones log concurrently via realtime.
 
 ## Local Setup
 - **Path:** `/Users/ishitagupta/Documents/Claude/Household Dashboard`
@@ -45,7 +45,7 @@ A **Puppy tab** also lives alongside — real-time puppy care logging (potty/mea
 - `puppy_profile` — id, name, dob, target_weight_lbs, vet_name, vet_phone, notes, created_at. Single row; `dob` drives the dynamic pee target.
 - `puppy_events` — id, event_type (`puppy_event_type`), occurred_at (editable, for backdate), detail (JSONB), notes, created_at. `detail` conventions: pee/poop → `{ "location": "pad" | "street" | "indoor_accident" }` (indoor_accident = failure; pad/street = success); meal → `{ "made_cups": 0.1667, "ate_pct": 75 }` (older meals may have `{ "grams": 45 }`); weight → `{ "lbs": 4.2 }`.
 - `puppy_sessions` — id, session_type (`puppy_session_type`: crate | alone | walk), started_at, ended_at (null = in progress), alone (bool), notes, created_at. Partial unique index `puppy_sessions_one_open_per_type` enforces at most one open session per type. Crate, Alone, and Walk are all start/stop timers.
-- `puppy_targets` — id, event_type (text), target_minutes (→ amber), overdue_minutes (→ red), active. Seeded: pee 90/120, poop 240/360, meal 240/300, crate 120/180, weight 10080/10080. Pee is overridden dynamically from age in the client (`~60 min per month of age`).
+- `puppy_targets` — id, event_type (text), target_minutes (→ amber), overdue_minutes (→ red), active. Seeded: pee 90/120, poop 240/360, meal 240/300, crate 120/180, weight 10080/10080. **`weight` is `active = false`** — the Weight tile shows the last logged value, never a countdown. `walk`/`alone` have no rows at all (also no counters). Pee is overridden dynamically from age in the client (fractional age × ~60 min/month — smooth ramp, clamped 45–240 min).
 
 **Puppy views** (`security_invoker = true`, granted to `authenticated`):
 - `v_puppy_status` — per tracked type: last occurrence, `elapsed_seconds`, `in_crate`, ok/amber/red `status` vs `puppy_targets`. Crate row uses open session (in crate) else last closed session's ended_at (out-of-crate nap timer). NOTE: the client computes live status/elapsed itself from raw last-events + targets (so cards tick without re-querying); this view is a server-side snapshot / debugging aid.
@@ -69,7 +69,7 @@ Old format used `label` instead of `workout` and `exercises[]` with `duration`/`
 ### Enums
 - `task_category`: puppy | todos | workouts | plant_watering
 - `assigned_to`: grant | ishita | both
-- `puppy_event_type`: pee | poop | meal | walk | training | play | meds | vet | weight (walk is currently logged as a session, not an event)
+- `puppy_event_type`: pee | poop | meal | walk | training | play | meds | vet | weight (walk is logged as a **session**, not an event — 3 historical `walk` event rows from 2026-07-20 are left in place but nothing writes new ones)
 - `puppy_session_type`: crate | alone | walk
 
 ### Realtime
@@ -88,7 +88,8 @@ Email/password only. No sign-up UI — accounts created manually in Supabase Das
 ```
 src/
   main.jsx                  # Root — BrowserRouter + AuthProvider
-  App.jsx                   # Routes: /login, /dashboard (AppShell) → index=Dashboard, fitness/=FitnessLayout
+  App.jsx                   # Routes: /login, /dashboard (AppShell) → index redirects to puppy/ (default tab),
+                            # home/=Dashboard, fitness/=FitnessLayout, puppy/=PuppyLayout
   index.css                 # Tailwind + slideFade keyframe + body gradient + scrollbar-hide + no number spinners
   lib/
     supabase.js             # Single Supabase client (reads env vars)
@@ -110,12 +111,14 @@ src/
     useToggleTask.js        # Optimistic toggle of completed/completed_at
     useCreateTask.js        # Inserts a new task row into Supabase; returns { create, saving, error }
   pages/
-    Login.jsx               # Email/password form, redirects to /dashboard
+    Login.jsx               # Email/password form, redirects to /dashboard (→ Poppy)
     Dashboard.jsx           # Header + 4 CategoryRows + AddTaskFab
   components/
-    AppShell.jsx            # Tab strip (Home/Fitness/Puppy) + <Outlet />
+    AppShell.jsx            # Tab strip (Home/Fitness/Poppy) + <Outlet />
     TabNav.jsx              # Sticky top nav — per-route theme (home light / fitness dark /
                             # puppy warm-cream, flips dark in puppy night mode via useNightMode()).
+                            # Home links to /dashboard/home (no `end` prop — index redirects to puppy).
+                            # NOTE: the puppy tab is LABELED "Poppy" (the dog's name); route/module stay `puppy`.
                             # Refresh button (window.location.reload) far-right, visible on all tabs.
     CategoryRow.jsx         # Label + animated pill + IndicatorDot.
                             # Pill click = expand/collapse. Dot/task clicks stop propagation so
@@ -173,39 +176,66 @@ src/
   puppy/
     PuppyLayout.jsx         # Warm-cream (or night dark) container; sets body bg by mode + <Outlet />
     lib/
-      nightMode.js          # useNightMode() → [night, toggle]; localStorage-persisted, manual only,
+      nightMode.js          # useNightMode() → [night, toggle]. AUTOMATIC on the device clock:
+                            # on 22:00, off 06:00 (isNightHour: h >= 22 || h < 6). The ☀️/🌙 button
+                            # writes a per-period override to localStorage['puppy-night-override']
+                            # ({ period, value }) that self-clears at the next boundary — periodKey
+                            # buckets 10pm→6am under the *previous* date so an override set at 11pm
+                            # lasts till 6am. Re-checks on a 30s interval + focus + visibilitychange,
                             # synced across components (TabNav + page) via a custom window event.
-      date.js               # todayISO, formatElapsed (count-up label), formatClock, toDatetimeLocal, weekdayShort
-      targets.js            # ageInMonths, dynamicPeeTarget (~60min/month), resolveTargets (seed + pee override),
-                            # statusFor → ok|amber|red, progressFor → 0..1 ring fill, smartStatus → header line
+      date.js               # todayISO, formatElapsed (count-up label), formatClock, formatClockShort
+                            # ("3:04a" — timeline pills only, where width is the constraint),
+                            # toDatetimeLocal, weekdayShort
+      targets.js            # ageInMonths (whole, for display) + ageInMonthsFractional (days/30.44, drives pee
+                            # target), dynamicPeeTarget (fractional ~60min/month, clamp 45–240), resolveTargets
+                            # (seed + pee override), statusFor → ok|amber|red, progressFor → 0..1 ring, smartStatus → header
       sleep.js              # buildSleepDay(sessions, nowMs) — asleep(=in crate)/awake breakdown for today,
-                            # 10-min segments merged into runs over a fixed 24h track (resets at local midnight)
+                            # 10-min segments merged into runs over a fixed 24h track (resets at local midnight).
+                            # clipSessionsToDay(sessions, type, dayStartMs, dayEndMs, openEndMs) — sessions of
+                            # one type as minute offsets in a day window, 1:1 with rows (DayTimeline taps).
       supabaseQueries.js    # fetchProfile/upsertProfile, fetchTargets, fetchLive (last-event-per-type +
                             # open sessions + lastSessionByType + last closed crate + raw events/sessions
                             # arrays for the sleep bar & food volume), logEvent (accepts occurredAt for
                             # backdating), updateEvent, deleteEvent, openSession/closeSession,
                             # logSession (backdated start + optional end), updateSession, deleteSession,
-                            # fetchDaily (v_puppy_daily, N days)
+                            # fetchDaily (v_puppy_daily, N days), fetchDayTimeline(dayISO) — date-ranged
+                            # events + overlapping sessions for one local day (fetchLive's 100/200 row
+                            # caps make it unusable for history)
     hooks/
       usePuppyLive.js       # profile + targets + live snapshot; realtime subscribe→refetch on
                             # puppy_events/puppy_sessions/puppy_profile (same pattern as useTodaysTasks)
       usePuppyDaily.js      # today rollup + 7-day trend from v_puppy_daily; refetches on changes
+      usePuppyDay.js        # one local day's events + sessions (fetchDayTimeline) + realtime
+                            # subscribe→refetch — powers DayTimeline for today and past days
       useNow.js             # ticking clock (1s) driving live count-ups
     pages/
-      Puppy.jsx             # Index. Ordered card grid (Pee/Poop/Meal/Crate/Alone/Walk/Weight). Tap = log
-                            # (pee/poop → LocationChooser, weight → WeightSheet, session → open/close toggle).
-                            # (meal tap → MealSheet). Long-press any card → LogSheet (backdate + edit/delete).
+      Puppy.jsx             # Index. CARDS entries carry `slot` (full | small | wide), `nightVisible`,
+                            # `noTimer` and `hidden` — layout is derived from those, not hardcoded.
+                            # THE WHOLE TAB IS A PAGER (day mode): the header sits outside PuppyPager and
+                            # stays put; everything else is page 1 and swipes away to reveal DayTimeline
+                            # as page 2. Owns `dayISO` for the timeline.
+                            # Page 1 order: WeightPrompt → Pee/Poop/Meal/Crate full-width stacked (big
+                            # sizing) → Walk half-width → SleepCard → Weight (wide row) → FoodCard → TodayCard.
+                            # Alone is defined but `hidden: true` (one-line restore).
+                            # Tap = log (pee/poop → LocationChooser, meal → MealSheet, weight → WeightSheet,
+                            # session → open/close toggle). Long-press any card → LogSheet (backdate + edit/delete).
                             # Header shows a smart status line (smartStatus). Successful potty (pad/street) fires a
-                            # PawBurst (day mode). Below grid (day only): SleepCard → FoodCard → TodayCard.
+                            # PawBurst (day mode).
                             # Night mode: only Pee/Poop/Crate, big cards, no bottom cards/prompt.
     components/
       PuppyCard.jsx         # Big tap target; pointer tap vs 500ms long-press. Emoji sits in a progress
                             # ring (ProgressRing) that fills toward the overdue point, green→amber→red,
                             # accent + full ring when a session is active, pulses when overdue.
+                            # Variants: `big` (min-h 140, ring 64, text-4xl), `wide` (short horizontal
+                            # row, min-h 84 — ring+label left, value right). `primary={null}` renders no
+                            # number at all (Walk/Alone idle, Weight).
+                            # Long-press is cleared on pointermove >10px AND on pointercancel — the cards
+                            # live inside the horizontal pager, and native scrolling stops pointermove, so
+                            # without the cancel handler a swipe would fire a long-press mid-scroll.
       LocationChooser.jsx   # 3-button Pad/Street/Accident sheet; × / backdrop cancels (nothing logged).
                             # Exports LocationButtons (the shared button group) + LOCATION_OPTIONS.
       LogSheet.jsx          # Long-press sheet: top logs a NEW backdated entry at a chosen time (potty uses
-                            # LocationButtons; meal grams; weight lbs; sessions = start + optional end, with a
+                            # LocationButtons; meal = MealFields cups + % eaten; weight lbs; sessions = start + optional end, with a
                             # one-open-per-type guard); bottom edits time/notes (events) or start/end (sessions)
                             # of the most recent entry, or deletes it. Works for every card. Replaces DetailSheet.
       WeightSheet.jsx       # Log a weight event ({ lbs }) — used by card + weekly prompt
@@ -215,6 +245,24 @@ src/
       WeightPrompt.jsx      # Dismissible weekly weigh-in nudge (>7d old); per-day localStorage dismiss
       UndoSnackbar.jsx      # Persistent "Last: Pee, 2m ago — undo" → deleteEvent
       SleepCard.jsx         # Asleep(=in crate)/awake totals + fixed 24h track bar (dark/light blue, now marker)
+      PuppyPager.jsx        # Generic 2-page horizontal pager for the WHOLE tab (CSS scroll-snap, no
+                            # library): takes `labels` + two children. Full-bleed via -mx-4/md:-mx-6 with
+                            # px-4 re-applied per page (cancels PuppyLayout's padding). Container takes the
+                            # ACTIVE page's height with transition-[height] (the pages differ ~2x, so lerping
+                            # would drag content under your finger) and scrolls the window to the pager top on
+                            # page change. Labelled ‹ / › buttons + dots below as a backup for non-touch.
+                            # Owns page index/scroll — Puppy.jsx re-renders every 1s from useNow, keep it out.
+      DayTimeline.jsx       # Vertical 24h track (720px = 1440min) for one day: awake fill + crate sessions as
+                            # dark-blue bands (square edges — they're time spans), "now" line on today.
+                            # 💧/💩 pills mirror each other either side of the track, each on a leader line
+                            # back to the exact minute; accidents turn the pill red. Walk lanes sit OUTBOARD
+                            # of the poop pills: accent bar spanning the walk + leader + minutes-only pill.
+                            # Column offsets (TRACK_W/LEADER/WALK_LANE_X) are MEASURED to fit a 390px phone —
+                            # widest poop pill ends at 97px, walk chain ends 7px inside the 167px half-width.
+                            # Re-measure in the browser before growing any of them. Tap anything →
+                            # TimelineEditSheet. Day <select> (last 14 days, Today/Yesterday/…), defaults today.
+      TimelineEditSheet.jsx # Retime or delete one timeline entry — events → updateEvent/deleteEvent,
+                            # sessions → updateSession/deleteSession (delete removes start+end together).
       FoodCard.jsx          # Today's food volume: cups eaten (Σ made_cups·ate_pct) of cups made · N meals
       TodayCard.jsx         # Potty rollup + trend: big success %, 💧💩⚠️🍽️ chips, 7-day bars (day only)
       PawBurst.jsx          # Paw-print celebration overlay (pawBurst keyframe); self-unmounts ~1s
@@ -257,23 +305,34 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
 - **Palette tokens (`pup.*`):** `accent #E0894B`, `ink #4A3B30`, `muted #A0917F`, `line #EADFD1`,
   `ok #7BA86A`, `amber #E0A23B`, `red #D8664A`, `sleep #2B4C7E` (dark blue), `awake #AFCDEC` (light blue);
   night: `nightbg/nightcard/nightink/nightline`.
-- **Cards:** `rounded-2xl border-2`, min-h 120px (140px in night mode). Emoji sits inside a progress
-  ring (SVG, ~56px / 64px in night) that fills toward the overdue point and colors ok/amber/red;
-  active session = full accent ring; overdue = `pupPulse` animation. Status border reinforces the ring.
-  500ms long-press opens the detail sheet.
+- **Cards:** `rounded-2xl border-2`. Three sizes: `big` (min-h 140px, ring 64px — the four full-width
+  tiles and all night cards), default (min-h 120px, ring 56px — Walk), `wide` (min-h 84px horizontal
+  row, ring 44px — Weight). Emoji sits inside a progress ring (SVG) that fills toward the overdue point
+  and colors ok/amber/red; active session = full accent ring; overdue = `pupPulse` animation. Status
+  border reinforces the ring. 500ms long-press opens the detail sheet.
+- **Tile order (day):** Pee → Poop → Meal → Crate full-width stacked, then Walk at half width; below
+  them SleepCard → Weight (wide) → Food → Today. Walk/Alone/Weight show no idle counter.
+  All of that is page 1 of the tab-wide pager; the header sits above it and doesn't move.
+- **Timeline:** vertical 24h track (square-edged spans), `pup.sleep`/`pup.awake` fill matching the bar.
+  💧 left / 💩 right as mirrored pills on `pup.line` leader lines; accidents turn the pill `pup.red`.
+  `pup.accent` walk lanes outboard of the poop pills, with a minutes-only pill.
 - **Header:** serif name + a muted smart status line (`smartStatus`) surfacing the most urgent thing.
 - **Celebration:** `PawBurst` (6 `🐾` via `pawBurst` keyframe) on a successful potty; day mode only.
 - **Today card:** single `rounded-2xl` card — big success % (ok/amber/red), icon-chip counts, 7-day bars.
-- **Night mode:** manual toggle (☀️/🌙 in header), persisted in `localStorage['puppy-night-mode']`,
-  never auto-switches on system theme. Shows only Pee/Poop/Crate, no Today card / prompt.
+- **Night mode:** automatic on the device clock — on at 22:00, off at 06:00. The ☀️/🌙 header button
+  overrides it for the current period only (`localStorage['puppy-night-override']`), then it reverts to
+  automatic. Never keys off system theme. Shows only Pee/Poop/Crate, no bottom cards / prompt.
 
 ## What's Built (Puppy)
-- **Realtime care log:** tap-to-log card grid (Pee/Poop/Meal/Crate/Alone/Walk/Weight); two phones sync live.
+- **Default tab:** the app lands on Poppy — `/dashboard` redirects to `/dashboard/puppy`, Home is `/dashboard/home`.
+- **Realtime care log:** tap-to-log tiles (Pee/Poop/Meal/Crate full-width, Walk small, Weight wide);
+  two phones sync live. Alone is defined but hidden.
 - **Potty flow:** pee/poop tap → Pad/Street/Accident chooser (× cancels — nothing logged). Accidents feed success rate.
 - **Sessions:** crate/alone/walk toggle (first tap opens, second closes), live elapsed; DB enforces one open per type.
-- **Timers:** minute granularity everywhere except the Alone card (seconds).
+- **Timers:** minute granularity everywhere except the Alone card (seconds). Walk, Alone and Weight
+  show **no idle counter or ring** — blank until a session starts, then a live count-up.
 - **Live timers + progress rings:** cards count up since last event; a ring around the emoji fills
-  green→amber→red toward age-tuned thresholds (pee = ~60min/month of age from `puppy_profile.dob`;
+  green→amber→red toward age-tuned thresholds (pee = fractional age × ~60min/month from `puppy_profile.dob`;
   others from `puppy_targets`) and pulses when overdue. Active sessions show a full accent ring.
 - **Smart header line:** one contextual sentence ("Next pee in ~20m" / "On a walk — 12m in 🐾").
 - **Win celebration:** a paw-print burst plays when a successful potty (pad/street) is logged (day mode).
@@ -282,12 +341,18 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
   Pad/Street/Accident; sessions take start + optional end) and/or edit-time/delete the most recent entry.
 - **Sleep tracker:** asleep(=in crate)/awake totals for the day + a fixed 24h bar that fills dark-blue
   (asleep) / light-blue (awake) in 10-min segments, growing to a "now" marker; resets at local midnight.
+- **Day timeline:** swipe the **whole tab** left (the header stays pinned, everything else slides away)
+  for a full-page vertical 24h track — asleep/awake fill, pee/poop pills mirrored either side on leader
+  lines back to the exact minute, walk lanes outboard showing duration in minutes.
+  Tap any of them to retime or delete it. Live for today via realtime; a day dropdown
+  (last 14 days) scopes it to any past day. Labelled ‹ / › buttons under the pager as a non-touch backup.
 - **Food logging:** tapping Meal asks cups made (default 1/6) + % she ate; a Food card sums the day's
   volume eaten (Σ made_cups·ate_pct) — meal `detail` is `{ made_cups, ate_pct }`.
 - **Today card:** one merged card — big potty-success %, icon-chip counts, 7-day success-rate bars.
 - **Weekly weigh-in nudge:** dismissible banner when latest weight is >7 days old.
 - **Profile editor:** in-app sheet for name/DOB/target weight/vet (no seeding — user fills it in).
-- **Night mode:** manual, persisted, stripped-down dark view for 3am potty runs.
+- **Night mode:** automatic 22:00–06:00, stripped-down dark view for 3am potty runs; the ☀️/🌙 button
+  overrides it until the next boundary.
 
 ## What's Built (Fitness)
 - **CP1–CP3:** Fitness scaffold, Today view (lift/rest/cardio/stretch), LiftingLogForm with auto-save

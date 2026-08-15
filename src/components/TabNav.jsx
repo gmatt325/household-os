@@ -57,8 +57,7 @@ export default function TabNav() {
     <nav className={`sticky top-0 z-20 flex items-stretch border-b ${t.nav}`}>
       <div className="flex flex-1">
         <NavLink
-          to="/dashboard"
-          end
+          to="/dashboard/home"
           className={({ isActive }) => `${base} ${isActive ? t.active : t.inactive}`}
         >
           Home

@@ -60,6 +60,7 @@ export default function PuppyCard({
   progress = null,
   night = false,
   big = false,
+  wide = false,
   onTap,
   onLongPress,
 }) {
@@ -114,22 +115,53 @@ export default function PuppyCard({
   const primaryColor =
     status === 'red' ? 'text-pup-red' : status === 'amber' ? 'text-pup-amber' : active ? 'text-pup-accent' : ''
 
+  const press = {
+    onPointerDown: handleDown,
+    onPointerMove: handleMove,
+    onPointerUp: handleUp,
+    onPointerLeave: clear,
+    // Native scrolling takes the gesture over and stops sending pointermove, so
+    // without this the long-press timer survives a swipe and fires mid-scroll.
+    onPointerCancel: clear,
+    onContextMenu: (e) => e.preventDefault(),
+  }
+  const shell = `select-none touch-manipulation rounded-2xl border-2 text-left transition-colors active:scale-[0.98] ${border} ${surface}`
+  const labelCls = `text-[11px] uppercase tracking-widest ${night ? 'text-zinc-500' : 'text-pup-muted'}`
+
+  // Short horizontal row — used for cards that carry a value rather than a timer.
+  if (wide) {
+    return (
+      <button type="button" {...press} className={`${shell} flex w-full min-h-[84px] items-center justify-between gap-4 px-4 py-3`}>
+        <div className="flex items-center gap-3">
+          <ProgressRing emoji={emoji} progress={progress} status={status} active={active} night={night} size={44} />
+          <span className={labelCls}>{label}</span>
+        </div>
+        <div className="text-right">
+          {primary != null && (
+            <p className={`text-2xl font-bold tabular-nums leading-none ${primaryColor}`}>{primary}</p>
+          )}
+          {secondary && (
+            <p className={`text-sm ${primary != null ? 'mt-1' : ''} ${night ? 'text-zinc-500' : 'text-pup-muted'}`}>{secondary}</p>
+          )}
+        </div>
+      </button>
+    )
+  }
+
   return (
     <button
       type="button"
-      onPointerDown={handleDown}
-      onPointerMove={handleMove}
-      onPointerUp={handleUp}
-      onPointerLeave={clear}
-      onContextMenu={(e) => e.preventDefault()}
-      className={`select-none touch-manipulation flex flex-col items-start justify-between rounded-2xl border-2 p-4 text-left transition-colors active:scale-[0.98] ${border} ${surface} ${big ? 'min-h-[140px]' : 'min-h-[120px]'}`}
+      {...press}
+      className={`${shell} flex flex-col items-start justify-between p-4 ${big ? 'min-h-[140px]' : 'min-h-[120px]'}`}
     >
       <div className="flex w-full items-center justify-between">
         <ProgressRing emoji={emoji} progress={progress} status={status} active={active} night={night} size={big ? 64 : 56} />
-        <span className={`text-[11px] uppercase tracking-widest ${night ? 'text-zinc-500' : 'text-pup-muted'}`}>{label}</span>
+        <span className={labelCls}>{label}</span>
       </div>
       <div className="mt-2">
-        <p className={`font-bold tabular-nums leading-none ${big ? 'text-4xl' : 'text-3xl'} ${primaryColor}`}>{primary}</p>
+        {primary != null && (
+          <p className={`font-bold tabular-nums leading-none ${big ? 'text-4xl' : 'text-3xl'} ${primaryColor}`}>{primary}</p>
+        )}
         {secondary && (
           <p className={`mt-1.5 text-xs ${night ? 'text-zinc-500' : 'text-pup-muted'}`}>{secondary}</p>
         )}
