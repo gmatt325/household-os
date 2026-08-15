@@ -14,20 +14,26 @@ import ProfileSheet from '../components/ProfileSheet.jsx'
 import UndoSnackbar from '../components/UndoSnackbar.jsx'
 import TodayCard from '../components/TodayCard.jsx'
 import SleepCard from '../components/SleepCard.jsx'
+import PuppyPager from '../components/PuppyPager.jsx'
+import DayTimeline from '../components/DayTimeline.jsx'
 import FoodCard from '../components/FoodCard.jsx'
 import MealSheet from '../components/MealSheet.jsx'
 import PawBurst from '../components/PawBurst.jsx'
 import WeightPrompt from '../components/WeightPrompt.jsx'
 
-// Ordered card grid. `nightVisible` marks the three cards kept in night mode.
+// Ordered cards. `slot` drives layout: 'full' = full-width stacked (the
+// high-frequency ones), 'small' = half-width, 'wide' = short horizontal row
+// below the sleep pager. `nightVisible` marks the three kept in night mode.
+// `noTimer` cards never show an idle "time since" — a running session still
+// counts up. `hidden` keeps a card defined but off the grid.
 const CARDS = [
-  { kind: 'event', type: 'pee', emoji: '💧', label: 'Pee', chooseLocation: true, nightVisible: true },
-  { kind: 'event', type: 'poop', emoji: '💩', label: 'Poop', chooseLocation: true, nightVisible: true },
-  { kind: 'event', type: 'meal', emoji: '🍽️', label: 'Meal' },
-  { kind: 'session', type: 'crate', emoji: '🛏️', label: 'Crate', nightVisible: true },
-  { kind: 'session', type: 'alone', emoji: '🏠', label: 'Alone', secondsTimer: true },
-  { kind: 'session', type: 'walk', emoji: '🐾', label: 'Walk' },
-  { kind: 'event', type: 'weight', emoji: '⚖️', label: 'Weight', special: 'weight' },
+  { kind: 'event', type: 'pee', emoji: '💧', label: 'Pee', chooseLocation: true, nightVisible: true, slot: 'full' },
+  { kind: 'event', type: 'poop', emoji: '💩', label: 'Poop', chooseLocation: true, nightVisible: true, slot: 'full' },
+  { kind: 'event', type: 'meal', emoji: '🍽️', label: 'Meal', slot: 'full' },
+  { kind: 'session', type: 'crate', emoji: '🛏️', label: 'Crate', nightVisible: true, slot: 'full' },
+  { kind: 'session', type: 'walk', emoji: '🐾', label: 'Walk', slot: 'small', noTimer: true },
+  { kind: 'session', type: 'alone', emoji: '🏠', label: 'Alone', secondsTimer: true, noTimer: true, slot: 'small', hidden: true },
+  { kind: 'event', type: 'weight', emoji: '⚖️', label: 'Weight', special: 'weight', slot: 'wide', noTimer: true },
 ]
 
 export default function Puppy() {
@@ -42,6 +48,7 @@ export default function Puppy() {
   const [mealOpen, setMealOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [undo, setUndo] = useState(null) // { id, label, at }
+  const [dayISO, setDayISO] = useState(todayISO) // selected day on the timeline page
   const [burst, setBurst] = useState(0) // bump to replay the paw-burst; 0 = hidden
 
   const resolved = resolveTargets(targets, profile?.dob)
@@ -130,7 +137,14 @@ export default function Puppy() {
           secondary: closed ? napCopy : 'Tap to crate',
         }
       }
-      return { active: false, status: 'neutral', progress: null, primary: '—', secondary: idleLabel[card.type] ?? 'Tap to start' }
+      // Idle walk/alone: no counter at all, just the prompt.
+      return {
+        active: false,
+        status: 'neutral',
+        progress: null,
+        primary: card.noTimer ? null : '—',
+        secondary: idleLabel[card.type] ?? 'Tap to start',
+      }
     }
 
     // Event card
@@ -151,6 +165,11 @@ export default function Puppy() {
       secondary = `since ${formatClock(last.occurred_at)}`
     }
 
+    if (card.noTimer) {
+      // e.g. Weight — the last logged value is the useful number, not "3d ago".
+      return { active: false, status: 'neutral', progress: null, primary: null, secondary }
+    }
+
     return {
       active: false,
       status,
@@ -160,7 +179,32 @@ export default function Puppy() {
     }
   }
 
-  const visibleCards = night ? CARDS.filter((c) => c.nightVisible) : CARDS
+  // Layout groups. Night keeps the stripped-down Pee/Poop/Crate view.
+  const shown = CARDS.filter((c) => !c.hidden)
+  const nightCards = shown.filter((c) => c.nightVisible)
+  const fullCards = shown.filter((c) => c.slot === 'full')
+  const smallCards = shown.filter((c) => c.slot === 'small')
+  const wideCards = shown.filter((c) => c.slot === 'wide')
+
+  function renderCard(card, extra = {}) {
+    const v = cardView(card)
+    return (
+      <PuppyCard
+        key={`${card.kind}-${card.type}`}
+        emoji={card.emoji}
+        label={card.label}
+        primary={v.primary}
+        secondary={v.secondary}
+        status={v.status}
+        active={v.active}
+        progress={v.progress}
+        night={night}
+        onTap={() => handleTap(card)}
+        onLongPress={() => handleLongPress(card)}
+        {...extra}
+      />
+    )
+  }
 
   return (
     <div className="py-6">
@@ -212,41 +256,42 @@ export default function Puppy() {
 
       {!loading && !error && (
         <>
-          {!night && (
-            <div className="mb-4">
-              <WeightPrompt lastWeightAt={lastWeightAt} night={night} onLogged={refetch} />
+          {night ? (
+            // 3am view: stripped down, no pager.
+            <div className="grid grid-cols-1 gap-3">
+              {nightCards.map((card) => renderCard(card, { big: true }))}
             </div>
-          )}
+          ) : (
+            // The whole tab is a pager — swipe and everything below the header
+            // slides away to reveal the timeline.
+            <PuppyPager labels={['Poppy', 'Timeline']}>
+              <div>
+                <div className="mb-4">
+                  <WeightPrompt lastWeightAt={lastWeightAt} night={night} onLogged={refetch} />
+                </div>
 
-          {/* Card grid */}
-          <div className={`grid gap-3 ${night ? 'grid-cols-1' : 'grid-cols-2'}`}>
-            {visibleCards.map((card) => {
-              const v = cardView(card)
-              return (
-                <PuppyCard
-                  key={`${card.kind}-${card.type}`}
-                  emoji={card.emoji}
-                  label={card.label}
-                  primary={v.primary}
-                  secondary={v.secondary}
-                  status={v.status}
-                  active={v.active}
-                  progress={v.progress}
-                  night={night}
-                  big={night}
-                  onTap={() => handleTap(card)}
-                  onLongPress={() => handleLongPress(card)}
-                />
-              )
-            })}
-          </div>
+                {/* High-frequency taps: full width, stacked */}
+                <div className="grid grid-cols-1 gap-3">
+                  {fullCards.map((card) => renderCard(card, { big: true }))}
+                </div>
 
-          {!night && (
-            <div className="mt-6 space-y-4">
-              <SleepCard sessions={live.sessions} now={now} />
-              <FoodCard events={live.events} now={now} />
-              <TodayCard today={todayRow} rows={rows} />
-            </div>
+                {/* Secondary tiles: half width */}
+                {smallCards.length > 0 && (
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    {smallCards.map((card) => renderCard(card))}
+                  </div>
+                )}
+
+                <div className="mt-6 space-y-4">
+                  <SleepCard sessions={live.sessions} now={now} />
+                  {wideCards.map((card) => renderCard(card, { wide: true }))}
+                  <FoodCard events={live.events} now={now} />
+                  <TodayCard today={todayRow} rows={rows} />
+                </div>
+              </div>
+
+              <DayTimeline dayISO={dayISO} onDayChange={setDayISO} now={now} night={night} />
+            </PuppyPager>
           )}
         </>
       )}

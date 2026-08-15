@@ -64,3 +64,25 @@ export function buildSleepDay(sessions, nowMs) {
 }
 
 export const SLEEP_DAY_MIN = DAY_MIN
+
+// Sessions of one type clipped to a day window, as minute offsets from the day's
+// start. Unlike buildSleepDay's merged 10-min runs these map 1:1 to rows, so the
+// timeline can make each band tappable. `openEndMs` caps a still-running session
+// (pass `now` for today so an open crate stops at the current time).
+export function clipSessionsToDay(sessions, type, dayStartMs, dayEndMs, openEndMs = dayEndMs) {
+  const out = []
+  for (const s of sessions ?? []) {
+    if (s.session_type !== type) continue
+    const start = new Date(s.started_at).getTime()
+    const end = s.ended_at ? new Date(s.ended_at).getTime() : openEndMs
+    const a = Math.max(start, dayStartMs)
+    const b = Math.min(end, dayEndMs)
+    if (b <= a) continue
+    out.push({
+      session: s,
+      startMin: (a - dayStartMs) / 60000,
+      endMin: (b - dayStartMs) / 60000,
+    })
+  }
+  return out.sort((x, y) => x.startMin - y.startMin)
+}

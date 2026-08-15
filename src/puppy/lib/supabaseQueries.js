@@ -94,6 +94,43 @@ export async function fetchLive() {
   }
 }
 
+// ---- Day timeline ----
+// Everything that happened on one local calendar day: events inside the day, and
+// sessions that overlap it at all (a crate session can start before midnight or
+// still be running). fetchLive() caps at 100/200 rows, so history needs its own
+// date-ranged query rather than filtering that snapshot.
+export async function fetchDayTimeline(dayISO) {
+  const dayStart = new Date(`${dayISO}T00:00:00`) // local midnight
+  const dayEnd = new Date(dayStart)
+  dayEnd.setDate(dayEnd.getDate() + 1)
+  const startISO = dayStart.toISOString()
+  const endISO = dayEnd.toISOString()
+
+  const [eventsRes, sessionsRes] = await Promise.all([
+    supabase
+      .from('puppy_events')
+      .select('id, event_type, occurred_at, detail, notes')
+      .gte('occurred_at', startISO)
+      .lt('occurred_at', endISO)
+      .order('occurred_at', { ascending: true }),
+    supabase
+      .from('puppy_sessions')
+      .select('*')
+      .lt('started_at', endISO)
+      .or(`ended_at.gte.${startISO},ended_at.is.null`)
+      .order('started_at', { ascending: true }),
+  ])
+  if (eventsRes.error) throw eventsRes.error
+  if (sessionsRes.error) throw sessionsRes.error
+
+  return {
+    events: eventsRes.data ?? [],
+    sessions: sessionsRes.data ?? [],
+    dayStartMs: dayStart.getTime(),
+    dayEndMs: dayEnd.getTime(),
+  }
+}
+
 // Most recent single event of a type (used to resolve the "undo last" target).
 export async function fetchLastEvent(eventType) {
   const { data, error } = await supabase

@@ -30,6 +30,14 @@ export function formatClock(iso) {
   return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 
+// "3:42p" — the compact form the timeline pills use, where horizontal space is
+// the binding constraint. Sheets keep the long formatClock form.
+export function formatClockShort(iso) {
+  return formatClock(iso)
+    .replace(/\s*([AaPp])[Mm]$/, (_, half) => half.toLowerCase())
+    .replace(/\s+/g, '')
+}
+
 // ISO string suitable for a datetime-local input value (local time, no seconds).
 export function toDatetimeLocal(iso) {
   const d = iso ? new Date(iso) : new Date()
