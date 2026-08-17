@@ -5,6 +5,7 @@ import { usePuppyLive } from '../hooks/usePuppyLive.js'
 import { usePuppyDaily } from '../hooks/usePuppyDaily.js'
 import { resolveTargets, statusFor, progressFor, smartStatus } from '../lib/targets.js'
 import { formatElapsed, formatClock, todayISO } from '../lib/date.js'
+import { formatAge } from '../lib/age.js'
 import { logEvent, deleteEvent, openSession, closeSession } from '../lib/supabaseQueries.js'
 import PuppyCard from '../components/PuppyCard.jsx'
 import LocationChooser from '../components/LocationChooser.jsx'
@@ -25,13 +26,15 @@ import WeightPrompt from '../components/WeightPrompt.jsx'
 // high-frequency ones), 'small' = half-width, 'wide' = short horizontal row
 // below the sleep pager. `nightVisible` marks the three kept in night mode.
 // `noTimer` cards never show an idle "time since" — a running session still
-// counts up. `hidden` keeps a card defined but off the grid.
+// counts up. `hidden` keeps a card defined but off the grid. `kind: 'info'`
+// cards are derived read-outs, not log buttons — `static` strips their handlers.
 const CARDS = [
   { kind: 'event', type: 'pee', emoji: '💧', label: 'Pee', chooseLocation: true, nightVisible: true, slot: 'full' },
   { kind: 'event', type: 'poop', emoji: '💩', label: 'Poop', chooseLocation: true, nightVisible: true, slot: 'full' },
   { kind: 'event', type: 'meal', emoji: '🍽️', label: 'Meal', slot: 'full' },
   { kind: 'session', type: 'crate', emoji: '🛏️', label: 'Crate', nightVisible: true, slot: 'full' },
   { kind: 'session', type: 'walk', emoji: '🐾', label: 'Walk', slot: 'small', noTimer: true },
+  { kind: 'info', type: 'age', emoji: '🎂', label: 'Age', special: 'age', slot: 'small', static: true },
   { kind: 'session', type: 'alone', emoji: '🏠', label: 'Alone', secondsTimer: true, noTimer: true, slot: 'small', hidden: true },
   { kind: 'event', type: 'weight', emoji: '⚖️', label: 'Weight', special: 'weight', slot: 'wide', noTimer: true },
 ]
@@ -110,6 +113,16 @@ export default function Puppy() {
 
   // Derive the display props for a card from live data + the ticking clock.
   function cardView(card) {
+    // Derived read-outs come first — cardView has no default branch, so an
+    // unhandled kind would fall through to the event path and look up a
+    // lastByType entry that will never exist.
+    if (card.kind === 'info' && card.special === 'age') {
+      const age = formatAge(profile?.dob, now)
+      const base = { active: false, status: 'neutral', progress: null }
+      return age
+        ? { ...base, primary: age.primary, unit: age.unit, secondary: age.detail }
+        : { ...base, primary: '—', unit: null, secondary: 'Set her birthday in profile' }
+    }
     if (card.kind === 'session') {
       const open = live.openByType[card.type]
       const runningLabel = { crate: 'In crate — tap to end', walk: 'Walking — tap to end', alone: 'Alone — tap to end' }
@@ -194,13 +207,15 @@ export default function Puppy() {
         emoji={card.emoji}
         label={card.label}
         primary={v.primary}
+        unit={v.unit}
         secondary={v.secondary}
         status={v.status}
         active={v.active}
         progress={v.progress}
         night={night}
-        onTap={() => handleTap(card)}
-        onLongPress={() => handleLongPress(card)}
+        readOnly={card.static}
+        onTap={card.static ? undefined : () => handleTap(card)}
+        onLongPress={card.static ? undefined : () => handleLongPress(card)}
         {...extra}
       />
     )

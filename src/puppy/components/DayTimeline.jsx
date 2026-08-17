@@ -77,6 +77,33 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
   const crateBands = ready ? clipSessionsToDay(sessions, 'crate', dayStartMs, dayEndMs, openEndMs) : []
   const walkBands = ready ? clipSessionsToDay(sessions, 'walk', dayStartMs, dayEndMs, openEndMs) : []
 
+  // Awake windows are the gaps between crate bands. A gap's edges ARE the
+  // neighbouring crate sessions' ended_at / started_at, so editing an edge
+  // writes to that one session and nothing beyond it. `prev`/`next` are null
+  // where the gap runs from midnight or up to now — those edges aren't editable.
+  const awakeBands = useMemo(() => {
+    const out = []
+    let cursor = 0
+    let prev = null
+    for (const band of crateBands) {
+      if (band.startMin > cursor) {
+        out.push({ startMin: cursor, endMin: band.startMin, prev, next: band })
+      }
+      if (band.endMin > cursor) {
+        cursor = band.endMin
+        prev = band
+      }
+    }
+    if (cursor < capMin) out.push({ startMin: cursor, endMin: capMin, prev, next: null })
+    // Sub-minute slivers can't be tapped and would just stack hit targets.
+    return out.filter((g) => g.endMin - g.startMin >= 1)
+  }, [crateBands, capMin])
+
+  // Clearing "Ended" in the sheet re-opens a session, which the DB refuses if
+  // another of that type is already running. Let the sheet say so up front.
+  const openOther = (s) =>
+    sessions.some((o) => o.session_type === s.session_type && !o.ended_at && o.id !== s.id)
+
   const marks = ready
     ? events
         .filter((e) => e.event_type === 'pee' || e.event_type === 'poop')
@@ -118,6 +145,8 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
         </span>
       </div>
 
+      <p className="-mt-2 mb-4 text-[11px] text-pup-muted/80">Tap a block to retime it.</p>
+
       {error && <p className="py-6 text-sm text-pup-red">Couldn't load this day.</p>}
 
       {!error && (
@@ -144,12 +173,42 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
             <div className="absolute left-0 top-0 w-full bg-pup-awake" style={{ height: pct(capMin) }} />
           </div>
 
+          {/* Awake windows — transparent hit targets over the base awake fill.
+              Rendered before the crate bands so an opaque band always wins if a
+              minHeight-padded sliver overlaps it. */}
+          {awakeBands.map((g) => (
+            <button
+              key={`awake-${g.startMin}`}
+              type="button"
+              onClick={() =>
+                setEditing({
+                  kind: 'awake',
+                  startMin: g.startMin,
+                  endMin: g.endMin,
+                  prev: g.prev?.session ?? null,
+                  next: g.next?.session ?? null,
+                  dayStartMs,
+                  openEndMs,
+                })
+              }
+              aria-label={`Awake ${formatClock(dayStartMs + g.startMin * 60000)}`}
+              className="absolute -translate-x-1/2"
+              style={{
+                left: '50%',
+                width: TRACK_W,
+                top: pct(g.startMin),
+                height: pct(g.endMin - g.startMin),
+                minHeight: 4,
+              }}
+            />
+          ))}
+
           {/* Asleep (crate) bands — tap to edit the session */}
           {crateBands.map((b) => (
             <button
               key={b.session.id}
               type="button"
-              onClick={() => setEditing({ kind: 'session', row: b.session })}
+              onClick={() => setEditing({ kind: 'session', row: b.session, openOther: openOther(b.session) })}
               aria-label={`Crate ${formatClock(b.session.started_at)}`}
               className="absolute -translate-x-1/2 bg-pup-sleep"
               style={{
@@ -168,7 +227,7 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
             <button
               key={b.session.id}
               type="button"
-              onClick={() => setEditing({ kind: 'session', row: b.session })}
+              onClick={() => setEditing({ kind: 'session', row: b.session, openOther: openOther(b.session) })}
               aria-label={`Walk ${formatClock(b.session.started_at)}`}
               className="absolute flex items-center"
               style={{

@@ -54,6 +54,7 @@ export default function PuppyCard({
   emoji,
   label,
   primary,
+  unit,
   secondary,
   status = 'neutral',
   active = false,
@@ -61,6 +62,7 @@ export default function PuppyCard({
   night = false,
   big = false,
   wide = false,
+  readOnly = false,
   onTap,
   onLongPress,
 }) {
@@ -125,7 +127,11 @@ export default function PuppyCard({
     onPointerCancel: clear,
     onContextMenu: (e) => e.preventDefault(),
   }
-  const shell = `select-none touch-manipulation rounded-2xl border-2 text-left transition-colors active:scale-[0.98] ${border} ${surface}`
+  // readOnly cards (Age) still render as a button for layout parity, but drop
+  // the press feedback so they don't look tappable.
+  const shell = `select-none touch-manipulation rounded-2xl border-2 text-left transition-colors ${
+    readOnly ? 'cursor-default' : 'active:scale-[0.98]'
+  } ${border} ${surface}`
   const labelCls = `text-[11px] uppercase tracking-widest ${night ? 'text-zinc-500' : 'text-pup-muted'}`
 
   // Short horizontal row — used for cards that carry a value rather than a timer.
@@ -161,6 +167,9 @@ export default function PuppyCard({
       <div className="mt-2">
         {primary != null && (
           <p className={`font-bold tabular-nums leading-none ${big ? 'text-4xl' : 'text-3xl'} ${primaryColor}`}>{primary}</p>
+        )}
+        {unit && (
+          <p className={`mt-1 text-xs ${night ? 'text-zinc-500' : 'text-pup-muted'}`}>{unit}</p>
         )}
         {secondary && (
           <p className={`mt-1.5 text-xs ${night ? 'text-zinc-500' : 'text-pup-muted'}`}>{secondary}</p>

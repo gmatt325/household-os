@@ -15,17 +15,30 @@ const LABELS = {
 
 const LOC_LABEL = { pad: 'Pad', street: 'Street', indoor_accident: 'Accident' }
 
+const iso = (v) => new Date(v).toISOString()
+const ms = (v) => new Date(v).getTime()
+
 // Edit control for anything tapped on the day timeline: retime it, or delete it.
 // Events write to puppy_events, sessions to puppy_sessions (delete removes the
-// whole session — start and end together).
+// whole session — start and end together). An "awake" target isn't a row at all
+// — it's the gap between two crate sessions, so its edges write to the crate on
+// that side, and only that one.
 export default function TimelineEditSheet({ target, night, onClose, onChanged }) {
+  const isAwake = target.kind === 'awake'
   const isSession = target.kind === 'session'
-  const row = target.row
+  const row = isAwake ? null : target.row
+
+  // Awake gaps carry their neighbours instead of a row of their own.
+  const { prev = null, next = null, dayStartMs, openEndMs } = isAwake ? target : {}
+  const awakeStartMs = isAwake ? dayStartMs + target.startMin * 60000 : null
+  const awakeEndMs = isAwake ? dayStartMs + target.endMin * 60000 : null
 
   const [when, setWhen] = useState(
-    toDatetimeLocal(isSession ? row.started_at : row.occurred_at),
+    toDatetimeLocal(isAwake ? awakeStartMs : isSession ? row.started_at : row.occurred_at),
   )
-  const [end, setEnd] = useState(isSession && row.ended_at ? toDatetimeLocal(row.ended_at) : '')
+  const [end, setEnd] = useState(
+    isAwake ? toDatetimeLocal(awakeEndMs) : isSession && row.ended_at ? toDatetimeLocal(row.ended_at) : '',
+  )
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
 
@@ -34,6 +47,7 @@ export default function TimelineEditSheet({ target, night, onClose, onChanged })
     : 'bg-white border-pup-line text-pup-ink'
   const labelCls = `text-xs uppercase tracking-widest ${night ? 'text-zinc-500' : 'text-pup-muted'}`
   const inputCls = `w-full rounded-xl border px-4 text-lg font-semibold min-h-[52px] focus:outline-none focus:border-pup-accent ${field}`
+  const hintCls = `mt-1.5 text-xs ${night ? 'text-zinc-500' : 'text-pup-muted'}`
   const primaryBtn =
     'w-full min-h-[52px] rounded-xl bg-pup-accent text-white text-sm font-semibold uppercase tracking-widest disabled:opacity-50'
 
@@ -50,18 +64,62 @@ export default function TimelineEditSheet({ target, night, onClose, onChanged })
     }
   }
 
+  // Move an awake window's edges by retiming the crate session on that side.
+  // Patches are single-key on purpose: updateSession writes them verbatim, so
+  // never sending ended_at here means we can't accidentally re-open a session
+  // and trip puppy_sessions_one_open_per_type.
+  function saveAwake() {
+    const startMs = ms(when)
+    const endMs = ms(end)
+    if (startMs >= endMs) {
+      setErr('Start must be before end.')
+      return
+    }
+    const startChanged = prev && startMs !== awakeStartMs
+    const endChanged = next && endMs !== awakeEndMs
+
+    // Neither edge may cross its own crate session — that's what keeps the
+    // change local. An inverted session would silently vanish from the track.
+    if (startChanged && startMs <= ms(prev.started_at)) {
+      setErr(`Start must be after that crate began (${formatClock(prev.started_at)}).`)
+      return
+    }
+    if (endChanged) {
+      const nextEndMs = next.ended_at ? ms(next.ended_at) : openEndMs
+      if (endMs >= nextEndMs) {
+        setErr(`End must be before that crate ends (${formatClock(nextEndMs)}).`)
+        return
+      }
+    }
+    if (!startChanged && !endChanged) {
+      onClose()
+      return
+    }
+
+    run(async () => {
+      if (startChanged) await updateSession(prev.id, { ended_at: iso(when) })
+      if (endChanged) await updateSession(next.id, { started_at: iso(end) })
+    })
+  }
+
   function save() {
+    if (isAwake) return saveAwake()
+    if (!when) return
     if (isSession) {
-      if (!when) return
+      // Clearing Ended re-opens the session; the DB allows only one open
+      // session per type, and the raw failure reads as a generic error.
+      if (!end && target.openOther) {
+        setErr('Already running — set an end time.')
+        return
+      }
       run(() =>
         updateSession(row.id, {
-          started_at: new Date(when).toISOString(),
-          ended_at: end ? new Date(end).toISOString() : null,
+          started_at: iso(when),
+          ended_at: end ? iso(end) : null,
         }),
       )
     } else {
-      if (!when) return
-      run(() => updateEvent(row.id, { occurred_at: new Date(when).toISOString() }))
+      run(() => updateEvent(row.id, { occurred_at: iso(when) }))
     }
   }
 
@@ -69,11 +127,18 @@ export default function TimelineEditSheet({ target, night, onClose, onChanged })
     run(() => (isSession ? deleteSession(row.id) : deleteEvent(row.id)))
   }
 
-  const kindLabel = LABELS[isSession ? row.session_type : row.event_type] ?? 'Entry'
-  const detail = !isSession && row.detail?.location ? ` · ${LOC_LABEL[row.detail.location] ?? row.detail.location}` : ''
-  const subtitle = isSession
+  const kindLabel = isAwake ? 'Awake' : LABELS[isSession ? row.session_type : row.event_type] ?? 'Entry'
+  const detail = !isAwake && !isSession && row.detail?.location
+    ? ` · ${LOC_LABEL[row.detail.location] ?? row.detail.location}`
+    : ''
+  const subtitle = isAwake
+    ? `${formatClock(awakeStartMs)}–${formatClock(awakeEndMs)}`
+    : isSession
     ? `${formatClock(row.started_at)}–${row.ended_at ? formatClock(row.ended_at) : 'running'}`
     : `${formatClock(row.occurred_at)}${detail}`
+
+  const startDisabled = isAwake && !prev
+  const endDisabled = isAwake && !next
 
   return (
     <Sheet title={kindLabel} night={night} onClose={onClose}>
@@ -81,26 +146,37 @@ export default function TimelineEditSheet({ target, night, onClose, onChanged })
 
       <div className="space-y-4">
         <div>
-          <label className={labelCls}>{isSession ? 'Started' : 'Time'}</label>
+          <label className={labelCls}>{isAwake ? 'Woke up' : isSession ? 'Started' : 'Time'}</label>
           <input
             type="datetime-local"
             value={when}
+            disabled={startDisabled}
             onChange={(e) => setWhen(e.target.value)}
-            className={`mt-2 ${inputCls}`}
+            className={`mt-2 ${inputCls} disabled:opacity-50`}
           />
+          {isAwake && (
+            <p className={hintCls}>
+              {startDisabled ? 'Starts at midnight.' : 'Moves the crate before this to end here.'}
+            </p>
+          )}
         </div>
 
-        {isSession && (
+        {(isAwake || isSession) && (
           <div>
-            <label className={labelCls}>Ended</label>
+            <label className={labelCls}>{isAwake ? 'Went in crate' : 'Ended'}</label>
             <input
               type="datetime-local"
               value={end}
+              disabled={endDisabled}
               onChange={(e) => setEnd(e.target.value)}
-              className={`mt-2 ${inputCls}`}
+              className={`mt-2 ${inputCls} disabled:opacity-50`}
             />
-            <p className={`mt-1.5 text-xs ${night ? 'text-zinc-500' : 'text-pup-muted'}`}>
-              Leave blank if it's still running.
+            <p className={hintCls}>
+              {isAwake
+                ? endDisabled
+                  ? 'Still awake.'
+                  : 'Moves the crate after this to start here.'
+                : "Leave blank if it's still running."}
             </p>
           </div>
         )}
@@ -110,14 +186,16 @@ export default function TimelineEditSheet({ target, night, onClose, onChanged })
         <button type="button" onClick={save} disabled={busy || !when} className={primaryBtn}>
           Save
         </button>
-        <button
-          type="button"
-          onClick={remove}
-          disabled={busy}
-          className="w-full min-h-[52px] rounded-xl border border-pup-red/50 text-sm font-semibold uppercase tracking-widest text-pup-red disabled:opacity-50"
-        >
-          Delete
-        </button>
+        {!isAwake && (
+          <button
+            type="button"
+            onClick={remove}
+            disabled={busy}
+            className="w-full min-h-[52px] rounded-xl border border-pup-red/50 text-sm font-semibold uppercase tracking-widest text-pup-red disabled:opacity-50"
+          >
+            Delete
+          </button>
+        )}
       </div>
     </Sheet>
   )
