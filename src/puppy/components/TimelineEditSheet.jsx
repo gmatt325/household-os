@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Sheet from './Sheet.jsx'
 import { toDatetimeLocal, formatClock } from '../lib/date.js'
+import TimeField from './TimeField.jsx'
 import { updateEvent, deleteEvent, updateSession, deleteSession } from '../lib/supabaseQueries.js'
 
 const LABELS = {
@@ -42,11 +43,7 @@ export default function TimelineEditSheet({ target, night, onClose, onChanged })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
 
-  const field = night
-    ? 'bg-pup-nightbg border-pup-nightline text-pup-nightink'
-    : 'bg-white border-pup-line text-pup-ink'
   const labelCls = `text-xs uppercase tracking-widest ${night ? 'text-zinc-500' : 'text-pup-muted'}`
-  const inputCls = `w-full rounded-xl border px-4 text-lg font-semibold min-h-[52px] focus:outline-none focus:border-pup-accent ${field}`
   const hintCls = `mt-1.5 text-xs ${night ? 'text-zinc-500' : 'text-pup-muted'}`
   const primaryBtn =
     'w-full min-h-[52px] rounded-xl bg-pup-accent text-white text-sm font-semibold uppercase tracking-widest disabled:opacity-50'
@@ -147,13 +144,9 @@ export default function TimelineEditSheet({ target, night, onClose, onChanged })
       <div className="space-y-4">
         <div>
           <label className={labelCls}>{isAwake ? 'Woke up' : isSession ? 'Started' : 'Time'}</label>
-          <input
-            type="datetime-local"
-            value={when}
-            disabled={startDisabled}
-            onChange={(e) => setWhen(e.target.value)}
-            className={`mt-2 ${inputCls} disabled:opacity-50`}
-          />
+          <div className="mt-2">
+            <TimeField value={when} onChange={setWhen} night={night} disabled={startDisabled} />
+          </div>
           {isAwake && (
             <p className={hintCls}>
               {startDisabled ? 'Starts at midnight.' : 'Moves the crate before this to end here.'}
@@ -164,13 +157,9 @@ export default function TimelineEditSheet({ target, night, onClose, onChanged })
         {(isAwake || isSession) && (
           <div>
             <label className={labelCls}>{isAwake ? 'Went in crate' : 'Ended'}</label>
-            <input
-              type="datetime-local"
-              value={end}
-              disabled={endDisabled}
-              onChange={(e) => setEnd(e.target.value)}
-              className={`mt-2 ${inputCls} disabled:opacity-50`}
-            />
+            <div className="mt-2">
+              <TimeField value={end} onChange={setEnd} night={night} disabled={endDisabled} />
+            </div>
             <p className={hintCls}>
               {isAwake
                 ? endDisabled
