@@ -13,20 +13,19 @@ const GUIDES = [
   { min: 1440, label: '12a' },
 ]
 
-// Track width and horizontal offsets from the centre line, in px. Pee and poop
-// pills mirror each other either side of the track, each on a leader line back
-// to the exact minute; the walk lane sits outboard of the poop pills with its
-// own leader and a minutes-only pill. WALK_LANE_X is a fixed constant rather
+// Track width and horizontal offsets from the centre line, in px. Walks are
+// drawn ON the main track in accent (they're the one thing you want to see
+// against sleep at a glance); pee, poop and walk pills all sit outboard on
+// leader lines back to the exact minute. WALK_LANE_X is a fixed constant rather
 // than derived from pill width — labels vary ("12:15p" is wider than "3:04a")
 // and a fixed offset can't collide. Tuned to fit a 390px phone.
 // Measured against a 390px viewport: the widest poop pill ("💩 12:15p") ends at
-// 97px, the walk lane clears it by 8px, and the walk pill ("120m") lands 7px
-// inside the 167px half-width. Don't grow these without re-checking that.
+// 97px, the walk pill starts at 105px and ("120m") lands 7px inside the 167px
+// half-width. Don't grow these without re-checking that.
 const TRACK_W = 44
 const LEADER = 10 // pee/poop connector length
 const WALK_LANE_X = 105
-const WALK_LANE_W = 8
-const WALK_LEADER = 6
+const WALK_LEADER = WALK_LANE_X - TRACK_W / 2 // walk pill reaches back to the track
 
 function isoOf(d) {
   const pad = (n) => String(n).padStart(2, '0')
@@ -221,25 +220,39 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
             />
           ))}
 
-          {/* Walk lanes, outboard of the poop pills: an accent bar spanning the
-              walk, a leader from its midpoint, then a minutes-only pill. */}
+          {/* Walks, on the main track in accent. Drawn after the crate bands so a
+              walk always wins an overlap — it's the more specific fact. */}
           {walkBands.map((b) => (
             <button
               key={b.session.id}
               type="button"
               onClick={() => setEditing({ kind: 'session', row: b.session, openOther: openOther(b.session) })}
               aria-label={`Walk ${formatClock(b.session.started_at)}`}
-              className="absolute flex items-center"
+              className="absolute -translate-x-1/2 bg-pup-accent"
               style={{
-                left: `calc(50% + ${WALK_LANE_X}px)`,
+                left: '50%',
+                width: TRACK_W,
                 top: pct(b.startMin),
                 height: pct(b.endMin - b.startMin),
-                minHeight: 8,
+                minHeight: 4,
               }}
+            />
+          ))}
+
+          {/* Walk duration pills, on a leader back to the middle of the walk.
+              Rendered before the pee/poop pills so their opaque backgrounds sit
+              over the hairline where it passes behind them. */}
+          {walkBands.map((b) => (
+            <button
+              key={`walk-pill-${b.session.id}`}
+              type="button"
+              onClick={() => setEditing({ kind: 'session', row: b.session, openOther: openOther(b.session) })}
+              aria-label={`Walk ${formatClock(b.session.started_at)} duration`}
+              className="absolute flex min-h-[28px] -translate-y-1/2 items-center"
+              style={{ left: `calc(50% + ${TRACK_W / 2}px)`, top: pct((b.startMin + b.endMin) / 2) }}
             >
-              <span className="h-full flex-none bg-pup-accent" style={{ width: WALK_LANE_W }} />
               <span className="h-px flex-none bg-pup-line" style={{ width: WALK_LEADER }} />
-              <span className="whitespace-nowrap rounded-full border border-pup-accent/40 bg-pup-card px-1 py-1 text-[11px] font-medium tabular-nums leading-none text-pup-accent">
+              <span className="whitespace-nowrap rounded-full border border-pup-accent/40 bg-pup-card px-1.5 py-1 text-[11px] font-medium tabular-nums leading-none text-pup-accent">
                 {Math.max(1, Math.round(b.endMin - b.startMin))}m
               </span>
             </button>

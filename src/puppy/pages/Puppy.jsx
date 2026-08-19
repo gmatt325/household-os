@@ -53,6 +53,7 @@ export default function Puppy() {
   const [undo, setUndo] = useState(null) // { id, label, at }
   const [dayISO, setDayISO] = useState(todayISO) // selected day on the timeline page
   const [burst, setBurst] = useState(0) // bump to replay the paw-burst; 0 = hidden
+  const [actionErr, setActionErr] = useState(null) // failed tap — surfaced under the header
 
   const resolved = resolveTargets(targets, profile?.dob)
   const todayRow = rows.find((r) => r.day === todayISO()) ?? rows[0] ?? null
@@ -68,9 +69,10 @@ export default function Puppy() {
     try {
       const row = await logEvent(type, detailObj)
       setUndo({ id: row.id, label, at: row.occurred_at })
+      setActionErr(null)
       refetch()
     } catch {
-      /* realtime/refetch will reconcile */
+      setActionErr(`Couldn't log ${label.toLowerCase()} — try again.`)
     }
   }
 
@@ -84,11 +86,23 @@ export default function Puppy() {
     } catch {}
   }
 
-  function handleTap(card) {
+  async function handleTap(card) {
     if (card.kind === 'session') {
       const open = live.openByType[card.type]
-      const p = open ? closeSession(open.id) : openSession(card.type)
-      p.then(refetch).catch(() => {})
+      try {
+        await (open ? closeSession(open.id) : openSession(card.type))
+        setActionErr(null)
+      } catch (e) {
+        // 23505 = puppy_sessions_one_open_per_type — the other phone already
+        // started this one. Refetching re-renders the card as active, so say so
+        // rather than leaving a tap that looks like it did nothing.
+        setActionErr(
+          e?.code === '23505'
+            ? `${card.label} was already running on the other phone — refreshed.`
+            : `Couldn't update ${card.label.toLowerCase()} — try again.`,
+        )
+      }
+      refetch()
       return
     }
     if (card.special === 'weight') {
@@ -231,6 +245,15 @@ export default function Puppy() {
           </h1>
           {!loading && !error && (
             <p className={`mt-0.5 text-sm ${night ? 'text-zinc-400' : 'text-pup-muted'}`}>{statusLine}</p>
+          )}
+          {actionErr && (
+            <button
+              type="button"
+              onClick={() => setActionErr(null)}
+              className="mt-1 text-left text-xs text-pup-red"
+            >
+              {actionErr} <span className="underline">dismiss</span>
+            </button>
           )}
         </div>
         <div className="flex flex-shrink-0 items-center gap-1">
