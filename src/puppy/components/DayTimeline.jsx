@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { usePuppyDay } from '../hooks/usePuppyDay.js'
 import { clipSessionsToDay, SLEEP_DAY_MIN } from '../lib/sleep.js'
 import { todayISO, formatClock, formatClockShort } from '../lib/date.js'
+import { normalizeFoodRow, isFoodRow, formatCups } from '../lib/food.js'
 import TimelineEditSheet from './TimelineEditSheet.jsx'
 
 const TRACK_H = 720 // px for a full 24h
@@ -15,16 +16,24 @@ const GUIDES = [
 
 // Track width and horizontal offsets from the centre line, in px. Walks are
 // drawn ON the main track in accent (they're the one thing you want to see
-// against sleep at a glance); pee, poop and walk pills all sit outboard on
-// leader lines back to the exact minute. WALK_LANE_X is a fixed constant rather
+// against sleep at a glance); pee, poop, walk and food pills all sit outboard on
+// leader lines back to the exact minute. The LANE_X constants are fixed rather
 // than derived from pill width — labels vary ("12:15p" is wider than "3:04a")
-// and a fixed offset can't collide. Tuned to fit a 390px phone.
-// Measured against a 390px viewport: the widest poop pill ("💩 12:15p") ends at
-// 97px, the walk pill starts at 105px and ("120m") lands 7px inside the 167px
-// half-width. Don't grow these without re-checking that.
-const TRACK_W = 44
-const LEADER = 10 // pee/poop connector length
-const WALK_LANE_X = 105
+// and a fixed offset can't collide.
+//
+// Four lanes now share the half-width per side, so the budget is tight — these
+// are MEASURED at 375px, in px from the centre line, where the half-width is 159:
+//   right  poop pill 26→91  ·  walk pill 99→137
+//   left   pee  pill 26→91  ·  food pill 101→159
+// Food is the outermost lane on the left, so unlike the others it is pinned to
+// the CARD EDGE and grows inward, its leader stretching to cover the gap. That
+// keeps it clear of the hour-guide labels in the left gutter (a right-pinned
+// pill left a few px of "12p" poking out from behind it) and makes the lane
+// self-adjusting instead of one more hand-measured constant. It also runs a size
+// smaller than pee/poop, which is what buys the 10px of clearance from pee.
+const TRACK_W = 36
+const LEADER = 8 // pee/poop connector length
+const WALK_LANE_X = 99
 const WALK_LEADER = WALK_LANE_X - TRACK_W / 2 // walk pill reaches back to the track
 
 function isoOf(d) {
@@ -114,6 +123,17 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
         .filter((m) => m.min >= 0 && m.min <= SLEEP_DAY_MIN)
     : []
 
+  // Food rows share one lane: a serving going down is an action and reads like
+  // the walk pill (emoji + time, accent); a level check is a reading, so it's a
+  // bare percentage — there isn't lane width for two emoji-and-time pills, and
+  // the difference in weight is exactly the difference in what they mean.
+  const foodMarks = ready
+    ? events
+        .filter(isFoodRow)
+        .map((e) => ({ event: e, food: normalizeFoodRow(e), min: (new Date(e.occurred_at).getTime() - dayStartMs) / 60000 }))
+        .filter((m) => m.food && m.min >= 0 && m.min <= SLEEP_DAY_MIN)
+    : []
+
   return (
     <div className="rounded-2xl border border-pup-line bg-pup-card p-3 md:p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -142,6 +162,7 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-pup-accent" /> walk
         </span>
+        <span className="flex items-center gap-1.5">🍽️ food · % left</span>
       </div>
 
       <p className="-mt-2 mb-4 text-[11px] text-pup-muted/80">Tap a block to retime it.</p>
@@ -257,6 +278,41 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
               </span>
             </button>
           ))}
+
+          {/* Food, outboard of pee on the left. Rendered before the pee/poop
+              pills so a pee pill's opaque background covers the long food leader
+              where the two cross. */}
+          {foodMarks.map((m) => {
+            const down = m.food.kind === 'down'
+            return (
+              <button
+                key={`food-${m.event.id}`}
+                type="button"
+                onClick={() => setEditing({ kind: 'event', row: m.event })}
+                aria-label={`Food ${formatClock(m.event.occurred_at)}`}
+                className="absolute left-0 flex min-h-[28px] -translate-y-1/2 items-center"
+                style={{ right: `calc(50% + ${TRACK_W / 2}px)`, top: pct(m.min) }}
+              >
+                <span
+                  className={`flex flex-none items-center gap-0.5 whitespace-nowrap rounded-full border bg-pup-card px-1 py-1 text-[10px] leading-none tabular-nums ${
+                    down ? 'border-pup-accent/40 text-pup-accent' : 'border-pup-line text-pup-muted'
+                  }`}
+                >
+                  {down ? (
+                    <>
+                      <span className="text-[13px] leading-none">🍽️</span>
+                      {formatClockShort(m.event.occurred_at)}
+                    </>
+                  ) : (
+                    `${m.food.removed ? 0 : m.food.leftPct}%`
+                  )}
+                </span>
+                {/* flex-1, not a fixed width: the pill is pinned to the card
+                    edge, so the leader is whatever's left over. */}
+                <span className="h-px flex-1 bg-pup-line" />
+              </button>
+            )
+          })}
 
           {/* Pee / poop pills, mirrored either side, each on a leader back to
               the track so the exact minute is unambiguous. */}

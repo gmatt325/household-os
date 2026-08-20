@@ -4,6 +4,7 @@ import { useNow } from '../hooks/useNow.js'
 import { usePuppyLive } from '../hooks/usePuppyLive.js'
 import { usePuppyDaily } from '../hooks/usePuppyDaily.js'
 import { resolveTargets, statusFor, progressFor, smartStatus } from '../lib/targets.js'
+import { bowlState, foodDayTotals, formatCups, formatScoops, DAILY_SCOOP_TARGET } from '../lib/food.js'
 import { formatElapsed, formatClock, todayISO } from '../lib/date.js'
 import { formatAge } from '../lib/age.js'
 import { logEvent, deleteEvent, openSession, closeSession } from '../lib/supabaseQueries.js'
@@ -18,7 +19,7 @@ import SleepCard from '../components/SleepCard.jsx'
 import PuppyPager from '../components/PuppyPager.jsx'
 import DayTimeline from '../components/DayTimeline.jsx'
 import FoodCard from '../components/FoodCard.jsx'
-import MealSheet from '../components/MealSheet.jsx'
+import FoodSheet from '../components/FoodSheet.jsx'
 import PawBurst from '../components/PawBurst.jsx'
 import WeightPrompt from '../components/WeightPrompt.jsx'
 
@@ -31,7 +32,7 @@ import WeightPrompt from '../components/WeightPrompt.jsx'
 const CARDS = [
   { kind: 'event', type: 'pee', emoji: '💧', label: 'Pee', chooseLocation: true, nightVisible: true, slot: 'full' },
   { kind: 'event', type: 'poop', emoji: '💩', label: 'Poop', chooseLocation: true, nightVisible: true, slot: 'full' },
-  { kind: 'event', type: 'meal', emoji: '🍽️', label: 'Meal', slot: 'full' },
+  { kind: 'event', type: 'meal', emoji: '🍽️', label: 'Food', slot: 'full' },
   { kind: 'session', type: 'crate', emoji: '🛏️', label: 'Crate', nightVisible: true, slot: 'full' },
   { kind: 'session', type: 'walk', emoji: '🐾', label: 'Walk', slot: 'small', noTimer: true },
   { kind: 'info', type: 'age', emoji: '🎂', label: 'Age', special: 'age', slot: 'small', static: true },
@@ -48,7 +49,7 @@ export default function Puppy() {
   const [chooser, setChooser] = useState(null) // { type, label }
   const [logCard, setLogCard] = useState(null) // card object for the long-press LogSheet
   const [weightOpen, setWeightOpen] = useState(false)
-  const [mealOpen, setMealOpen] = useState(false)
+  const [foodOpen, setFoodOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [undo, setUndo] = useState(null) // { id, label, at }
   const [dayISO, setDayISO] = useState(todayISO) // selected day on the timeline page
@@ -58,7 +59,10 @@ export default function Puppy() {
   const resolved = resolveTargets(targets, profile?.dob)
   const todayRow = rows.find((r) => r.day === todayISO()) ?? rows[0] ?? null
   const lastWeightAt = live.lastByType.weight?.occurred_at ?? null
-  const statusLine = smartStatus(live, resolved, now)
+  const bowl = bowlState(live.events)
+  const midnightMs = new Date(now).setHours(0, 0, 0, 0)
+  const todayFood = foodDayTotals(live.events, midnightMs)
+  const statusLine = smartStatus(live, resolved, now, bowl)
 
   function celebrate() {
     if (night) return // no flashing lights at 3am
@@ -110,7 +114,7 @@ export default function Puppy() {
       return
     }
     if (card.type === 'meal') {
-      setMealOpen(true)
+      setFoodOpen(true)
       return
     }
     if (card.chooseLocation) {
@@ -174,10 +178,39 @@ export default function Puppy() {
       }
     }
 
+    // Food: two states. While there's food in the bowl the card is the bowl —
+    // an accent "active" tile showing what's left, same grammar as an open
+    // session. You can't be overdue for a meal that's sitting right there, so
+    // the amber/red countdown only comes back once the bowl is empty.
+    if (card.type === 'meal' && bowl.hasFood) {
+      return {
+        active: true,
+        status: 'neutral',
+        progress: 1,
+        primary: `${bowl.leftPct ?? 0}%`,
+        secondary: `${formatCups(bowl.lastDown?.addedCups ?? 0)} cup at ${formatClock(bowl.downAt)} · tap to update`,
+      }
+    }
+
     // Event card
     const last = live.lastByType[card.type]
     const elapsed = last ? (now - new Date(last.occurred_at).getTime()) / 1000 : null
     const status = statusFor(elapsed, resolved[card.type])
+
+    // Empty bowl: the useful number isn't a countdown, it's how much of today's
+    // food has actually gone down. Ring = progress through the day's scoops;
+    // colour still comes from time-since-last, which is what the secondary line
+    // now spells out in words.
+    if (card.type === 'meal') {
+      return {
+        active: false,
+        status,
+        progress: Math.min(1, todayFood.scoops / DAILY_SCOOP_TARGET),
+        primary: `${formatScoops(todayFood.putDownCups)} of ${DAILY_SCOOP_TARGET}`,
+        unit: 'scoops today',
+        secondary: elapsed != null ? `${formatElapsed(elapsed)} since last` : 'Tap to log',
+      }
+    }
 
     let secondary
     if (card.type === 'weight') {
@@ -323,7 +356,7 @@ export default function Puppy() {
                 <div className="mt-6 space-y-4">
                   <SleepCard sessions={live.sessions} now={now} />
                   {wideCards.map((card) => renderCard(card, { wide: true }))}
-                  <FoodCard events={live.events} now={now} />
+                  <FoodCard totals={todayFood} />
                   <TodayCard today={todayRow} rows={rows} />
                 </div>
               </div>
@@ -353,7 +386,9 @@ export default function Puppy() {
         <LogSheet
           key={`${logCard.kind}-${logCard.type}`}
           card={logCard}
-          lastEvent={live.lastByType[logCard.type] ?? null}
+          lastEvent={logCard.type === 'meal' ? (bowl.lastRow?.row ?? null) : live.lastByType[logCard.type] ?? null}
+          bowl={bowl}
+          events={live.events}
           lastSession={live.lastSessionByType?.[logCard.type] ?? null}
           openSession={live.openByType[logCard.type] ?? null}
           night={night}
@@ -372,12 +407,13 @@ export default function Puppy() {
           }}
         />
       )}
-      {mealOpen && (
-        <MealSheet
+      {foodOpen && (
+        <FoodSheet
+          bowl={bowl}
           night={night}
-          onClose={() => setMealOpen(false)}
-          onLogged={(row) => {
-            setUndo({ id: row.id, label: 'Meal', at: row.occurred_at })
+          onClose={() => setFoodOpen(false)}
+          onLogged={(row, label) => {
+            setUndo({ id: row.id, label, at: row.occurred_at })
             refetch()
           }}
         />

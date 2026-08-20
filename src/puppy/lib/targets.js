@@ -65,12 +65,13 @@ export function progressFor(elapsedSeconds, target) {
   return Math.min(1, Math.max(0, mins / target.overdue_minutes))
 }
 
-// One contextual line for the header. Open sessions win; otherwise surface the
-// most urgent tracked type (pee/poop/meal) vs its target. `now` is ms.
+// One contextual line for the header. Open sessions win, then food sitting in
+// the bowl; otherwise surface the most urgent tracked type (pee/poop/meal) vs
+// its target. `now` is ms.
 const URGENT_TYPES = [
   { type: 'pee', label: 'pee' },
   { type: 'poop', label: 'poop' },
-  { type: 'meal', label: 'meal' },
+  { type: 'meal', label: 'food' },
 ]
 
 function fmtMin(mins) {
@@ -81,7 +82,7 @@ function fmtMin(mins) {
   return rem ? `${h}h ${rem}m` : `${h}h`
 }
 
-export function smartStatus(live, resolved, now) {
+export function smartStatus(live, resolved, now, bowl) {
   const open = live?.openByType ?? {}
   const openLabels = {
     walk: (mins) => `On a walk — ${fmtMin(mins)} in 🐾`,
@@ -95,8 +96,12 @@ export function smartStatus(live, resolved, now) {
     }
   }
 
+  // "Next meal in ~2h" is nonsense while food is sitting in front of her, so
+  // meal sits out the urgency race whenever the bowl isn't empty. A pee that's
+  // actually due still outranks anything the bowl has to say.
   let best = null // { label, remaining }
   for (const { type, label } of URGENT_TYPES) {
+    if (type === 'meal' && bowl?.hasFood) continue
     const last = live?.lastByType?.[type]
     const target = resolved?.[type]
     if (!last || !target?.target_minutes) continue
@@ -105,7 +110,10 @@ export function smartStatus(live, resolved, now) {
     if (best == null || remaining < best.remaining) best = { label, remaining }
   }
 
-  if (!best) return 'Tap a card to start tracking 🐾'
+  if (!best) {
+    if (bowl?.hasFood) return `${bowl.leftPct}% of her food left 🍽️`
+    return 'Tap a card to start tracking 🐾'
+  }
   const cap = best.label.charAt(0).toUpperCase() + best.label.slice(1)
   if (best.remaining <= 0) return `${cap} overdue by ${fmtMin(-best.remaining)}!`
   return `Next ${best.label} in ~${fmtMin(best.remaining)}`

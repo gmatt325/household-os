@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import Sheet from './Sheet.jsx'
 import { LocationButtons } from './LocationChooser.jsx'
-import { MealFields, DEFAULT_MADE_CUPS, DEFAULT_ATE_PCT, chipCls } from './MealSheet.jsx'
+import { chipCls } from './Chips.jsx'
+import { LeftPctField, CupsField, AddPreview } from './FoodSheet.jsx'
 import TimeField from './TimeField.jsx'
 import { toDatetimeLocal, formatClock, formatElapsed } from '../lib/date.js'
 import {
@@ -12,6 +13,16 @@ import {
   updateSession,
   deleteSession,
 } from '../lib/supabaseQueries.js'
+import {
+  DEFAULT_ADDED_CUPS,
+  logFoodDown,
+  logFoodCheck,
+  foodDetailPatch,
+  normalizeFoodRow,
+  foodSummary,
+  isFoodRow,
+  fullLevelBefore,
+} from '../lib/food.js'
 
 const LOC_LABEL = { pad: 'pad', street: 'street', indoor_accident: 'accident' }
 const MINUTE = 60000
@@ -46,6 +57,8 @@ function Divider({ night, children }) {
 export default function LogSheet({
   card,
   lastEvent,
+  bowl, // bowlState() — food writes need the full mark percentages read against
+  events, // raw recent events, so an edited food row can be re-based on its own history
   lastSession,
   openSession, // the currently-open session of this type (or null)
   night,
@@ -58,8 +71,8 @@ export default function LogSheet({
 
   // ---- create (backdate) state ----
   const [when, setWhen] = useState(toDatetimeLocal()) // event time
-  const [madeCups, setMadeCups] = useState(DEFAULT_MADE_CUPS)
-  const [atePct, setAtePct] = useState(DEFAULT_ATE_PCT)
+  const [addedCups, setAddedCups] = useState(DEFAULT_ADDED_CUPS)
+  const [leftPct, setLeftPct] = useState(bowl?.leftPct ?? 100)
   const [lbs, setLbs] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
@@ -84,6 +97,12 @@ export default function LogSheet({
   )
   const [editEnd, setEditEnd] = useState(lastSession?.ended_at ? toDatetimeLocal(lastSession.ended_at) : '')
   const [editNotes, setEditNotes] = useState(lastEvent?.notes ?? '')
+
+  // The most recent food row, in normalized form — its amounts are editable,
+  // which they never were under the old single-meal shape.
+  const recentFood = !isSession && lastEvent && isFoodRow(lastEvent) ? normalizeFoodRow(lastEvent) : null
+  const [editCups, setEditCups] = useState(recentFood?.addedCups || DEFAULT_ADDED_CUPS)
+  const [editLeftPct, setEditLeftPct] = useState(recentFood?.leftPct ?? 100)
 
   const field = night
     ? 'bg-pup-nightbg border-pup-nightline text-pup-nightink'
@@ -141,8 +160,18 @@ export default function LogSheet({
       if (location !== 'indoor_accident') onCelebrate?.()
     })
   }
-  function createMeal() {
-    run(() => logEvent('meal', { made_cups: madeCups, ate_pct: atePct }, iso(when)))
+  function createCheck() {
+    run(() => logFoodCheck({ fullLevel: bowl?.fullLevel ?? 0, leftPct, occurredAt: iso(when) }))
+  }
+  function createFoodDown() {
+    run(() =>
+      logFoodDown({
+        fullLevel: bowl?.fullLevel ?? 0,
+        leftPct: bowl?.hasFood ? leftPct : 0,
+        addedCups,
+        occurredAt: iso(when),
+      }),
+    )
   }
   function createWeight() {
     if (lbs === '') return
@@ -181,12 +210,18 @@ export default function LogSheet({
         }),
       )
     } else {
-      run(() =>
-        updateEvent(lastEvent.id, {
-          occurred_at: iso(editWhen),
-          notes: editNotes.trim() || null,
-        }),
-      )
+      const patch = { occurred_at: iso(editWhen), notes: editNotes.trim() || null }
+      // A legacy { made_cups, ate_pct } row keeps its old detail — rewriting it
+      // into the bowl shape would invent a level nobody measured.
+      if (recentFood && !recentFood.legacy) {
+        patch.detail = foodDetailPatch(recentFood.kind, {
+          fullLevel: fullLevelBefore(events, lastEvent.id),
+          leftPct: editLeftPct,
+          addedCups: editCups,
+          removed: recentFood.removed,
+        })
+      }
+      run(() => updateEvent(lastEvent.id, patch))
     }
   }
   function removeRecent() {
@@ -198,7 +233,7 @@ export default function LogSheet({
     let extra = ''
     if (e.detail?.location) extra = ` · ${LOC_LABEL[e.detail.location] ?? e.detail.location}`
     else if (e.detail?.lbs != null) extra = ` · ${e.detail.lbs} lbs`
-    else if (e.detail?.made_cups != null) extra = ` · ${e.detail.ate_pct ?? 100}% eaten`
+    else if (isFoodRow(e)) extra = ` · ${foodSummary(e)}`
     else if (e.detail?.grams != null) extra = ` · ${e.detail.grams} g`
     return `${formatClock(e.occurred_at)}${extra}`
   }
@@ -355,16 +390,33 @@ export default function LogSheet({
 
             {card.type === 'meal' && (
               <>
-                <MealFields
-                  madeCups={madeCups}
-                  setMadeCups={setMadeCups}
-                  atePct={atePct}
-                  setAtePct={setAtePct}
-                  night={night}
-                />
-                <button type="button" onClick={createMeal} disabled={busy} className={primaryBtn}>
-                  Log meal
-                </button>
+                {bowl?.hasFood && (
+                  <>
+                    <LeftPctField leftPct={leftPct} setLeftPct={setLeftPct} night={night} />
+                    <button type="button" onClick={createCheck} disabled={busy} className={primaryBtn}>
+                      Log check
+                    </button>
+                  </>
+                )}
+                <div className={`space-y-3 border-t pt-4 ${night ? 'border-pup-nightline' : 'border-pup-line'}`}>
+                  <CupsField
+                    cups={addedCups}
+                    setCups={setAddedCups}
+                    night={night}
+                    label={bowl?.hasFood ? 'Adding (cups)' : 'Put down (cups)'}
+                  />
+                  {bowl?.hasFood && (
+                    <AddPreview bowl={bowl} leftPct={leftPct} addedCups={addedCups} night={night} />
+                  )}
+                  <button
+                    type="button"
+                    onClick={createFoodDown}
+                    disabled={busy}
+                    className={bowl?.hasFood ? secondaryBtn : primaryBtn}
+                  >
+                    Put food down
+                  </button>
+                </div>
               </>
             )}
 
@@ -408,6 +460,22 @@ export default function LogSheet({
                 <label className={labelCls}>{outLabel}</label>
                 <TimeField value={editEnd} onChange={setEditEnd} night={night} />
               </div>
+            )}
+
+            {recentFood && !recentFood.legacy && (
+              <>
+                {recentFood.kind === 'down' && (
+                  <CupsField cups={editCups} setCups={setEditCups} night={night} label="Amount (cups)" />
+                )}
+                {!recentFood.removed && (
+                  <LeftPctField
+                    leftPct={editLeftPct}
+                    setLeftPct={setEditLeftPct}
+                    night={night}
+                    label={recentFood.kind === 'down' ? 'Was left before this' : 'How much was left'}
+                  />
+                )}
+              </>
             )}
 
             {!isSession && (

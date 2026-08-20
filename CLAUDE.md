@@ -5,7 +5,7 @@ Shared daily task dashboard for two people (Grant & Ishita). Tasks are grouped i
 
 A **Fitness tab** lives alongside the Home tab — dark gym-logbook aesthetic, mobile-first, single user (no per-user separation needed).
 
-A **Puppy tab** also lives alongside — real-time puppy care logging (potty/meals/crate/walks/weight). It is the **default landing tab** (`/dashboard` redirects to it; Home moved to `/dashboard/home`). Its own warm cream palette in day mode, plus a dark night mode that switches automatically on the device clock (22:00–06:00). Full-width tap tiles with live count-up timers, age-tuned amber/red thresholds, a swipeable sleep/day-timeline pager, house-training rollup + 7-day trend. Two phones log concurrently via realtime.
+A **Puppy tab** also lives alongside — real-time puppy care logging (potty/food/crate/walks/weight). It is the **default landing tab** (`/dashboard` redirects to it; Home moved to `/dashboard/home`). Its own warm cream palette in day mode, plus a dark night mode that switches automatically on the device clock (22:00–06:00). Full-width tap tiles with live count-up timers, age-tuned amber/red thresholds, a swipeable sleep/day-timeline pager, house-training rollup + 7-day trend. Two phones log concurrently via realtime.
 
 ## Local Setup
 - **Path:** `/Users/ishitagupta/Documents/Claude/Household Dashboard`
@@ -43,7 +43,7 @@ A **Puppy tab** also lives alongside — real-time puppy care logging (potty/mea
 
 **Puppy (all have RLS enabled with `authenticated` select/insert/update/delete policies):**
 - `puppy_profile` — id, name, dob, target_weight_lbs, vet_name, vet_phone, notes, created_at. Single row; `dob` drives the dynamic pee target.
-- `puppy_events` — id, event_type (`puppy_event_type`), occurred_at (editable, for backdate), detail (JSONB), notes, created_at. `detail` conventions: pee/poop → `{ "location": "pad" | "street" | "indoor_accident" }` (indoor_accident = failure; pad/street = success); meal → `{ "made_cups": 0.25, "ate_pct": 75 }` (older meals may have `{ "grams": 45 }`); weight → `{ "lbs": 4.2 }`.
+- `puppy_events` — id, event_type (`puppy_event_type`), occurred_at (editable, for backdate), detail (JSONB), notes, created_at. `detail` conventions: pee/poop → `{ "location": "pad" | "street" | "indoor_accident" }` (indoor_accident = failure; pad/street = success); food is a **bowl with a running level** — `meal` = food went down `{ "added_cups": 0.25, "left_pct": 10, "bowl_cups": 0.275 }`, `food_check` = a reading `{ "left_pct": 50, "bowl_cups": 0.1375 }` (plus `"removed": true` when the bowl was picked up rather than eaten); weight → `{ "lbs": 4.2 }`. **`left_pct` is read against the FULL MARK** — the level right after food last went down — so "¼ cup, then 50% left, then 10% left" is 0.25 → 0.125 → 0.025, not compounded. `bowl_cups` is absolute and computed at write time, which is what lets one row be edited or deleted without corrupting the rest of the chain. Legacy meals `{ "made_cups", "ate_pct" }` (and older `{ "grams" }`) are still read via a compat branch in `normalizeFoodRow`; nothing was backfilled.
 - `puppy_sessions` — id, session_type (`puppy_session_type`: crate | alone | walk), started_at, ended_at (null = in progress), alone (bool), notes, created_at. Partial unique index `puppy_sessions_one_open_per_type` enforces at most one open session per type. Crate, Alone, and Walk are all start/stop timers.
 - `puppy_targets` — id, event_type (text), target_minutes (→ amber), overdue_minutes (→ red), active. Seeded: pee 90/120, poop 240/360, meal 240/300, crate 120/180, weight 10080/10080. **`weight` is `active = false`** — the Weight tile shows the last logged value, never a countdown. `walk`/`alone` have no rows at all (also no counters). Pee is overridden dynamically from age in the client (fractional age × ~60 min/month — smooth ramp, clamped 45–240 min).
 
@@ -69,11 +69,13 @@ Old format used `label` instead of `workout` and `exercises[]` with `duration`/`
 ### Enums
 - `task_category`: puppy | todos | workouts | plant_watering
 - `assigned_to`: grant | ishita | both
-- `puppy_event_type`: pee | poop | meal | walk | training | play | meds | vet | weight (walk is logged as a **session**, not an event — 3 historical `walk` event rows from 2026-07-20 are left in place but nothing writes new ones)
+- `puppy_event_type`: pee | poop | meal | food_check | walk | training | play | meds | vet | weight (`meal` now means "a serving went down", so `v_puppy_daily.meal_count` counts servings and `food_check` rows never inflate it) (walk is logged as a **session**, not an event — 3 historical `walk` event rows from 2026-07-20 are left in place but nothing writes new ones)
 - `puppy_session_type`: crate | alone | walk
 
 ### Realtime
-Enable replication on `public.tasks` in Supabase Dashboard → Database → Replication for live cross-device sync to work. `puppy_events` and `puppy_sessions` were added to the `supabase_realtime` publication in the `create_puppy_tables` migration.
+Enable replication on `public.tasks` in Supabase Dashboard → Database → Replication for live cross-device sync to work. `puppy_events` and `puppy_sessions` were added to the `supabase_realtime` publication in the `create_puppy_tables` migration; `puppy_profile` was added later (`add_puppy_profile_to_realtime_publication`).
+
+⚠️ **A postgres_changes channel that names an unpublished table silently delivers NOTHING while still reporting `SUBSCRIBED`.** `usePuppyLive` binds all three puppy tables on one channel, so while `puppy_profile` was missing from the publication the whole Poppy tile grid never updated from the other phone — the day timeline kept working only because `usePuppyDay` binds just the two published tables. If live sync ever dies again, check the publication before anything else.
 
 ### Auth
 Email/password only. No sign-up UI — accounts created manually in Supabase Dashboard → Authentication → Users. Two users: Grant and Ishita.
@@ -188,14 +190,28 @@ src/
                             # toDatetimeLocal, weekdayShort
       targets.js            # ageInMonths (whole, for display) + ageInMonthsFractional (days/30.44, drives pee
                             # target), dynamicPeeTarget (fractional ~60min/month, clamp 45–240), resolveTargets
-                            # (seed + pee override), statusFor → ok|amber|red, progressFor → 0..1 ring, smartStatus → header
+                            # (seed + pee override), statusFor → ok|amber|red, progressFor → 0..1 ring,
+                            # smartStatus(live, resolved, now, bowl) → header. Food sits out the urgency
+                            # race while the bowl isn't empty ("next food in ~2h" is nonsense with food
+                            # right there); a pee that's actually due still outranks the bowl.
+      food.js               # THE BOWL MODEL — the one place food math lives. SCOOP_CUPS (0.25) +
+                            # DAILY_SCOOP_TARGET (3) define the day's goal; scoops are counted by
+                            # VOLUME (putDownCups / 0.25), so a 1/2-cup pour reads as 2 scoops, not 1.
+                            # formatScoops shows whole numbers cleanly and "2.4" for an odd pour.
+                            # normalizeFoodRow (single
+                            # shape for meal / food_check / legacy rows), foodRowsAsc, bowlState →
+                            # { hasFood, level, fullLevel, leftPct, lastDown, downAt }, fullLevelBefore
+                            # (the mark a given row was written against — edits re-base on this, NOT on
+                            # bowlState, which already includes the row), foodDayTotals → { putDownCups,
+                            # servings, eatenCups, leftCups }, levelAfterCheck/levelAfterDown,
+                            # logFoodDown/logFoodCheck/foodDetailPatch, formatCups, foodSummary.
       sleep.js              # buildSleepDay(sessions, nowMs) — asleep(=in crate)/awake breakdown for today,
                             # 10-min segments merged into runs over a fixed 24h track (resets at local midnight).
                             # clipSessionsToDay(sessions, type, dayStartMs, dayEndMs, openEndMs) — sessions of
                             # one type as minute offsets in a day window, 1:1 with rows (DayTimeline taps).
       supabaseQueries.js    # fetchProfile/upsertProfile, fetchTargets, fetchLive (last-event-per-type +
                             # open sessions + lastSessionByType + last closed crate + raw events/sessions
-                            # arrays for the sleep bar & food volume), logEvent (accepts occurredAt for
+                            # arrays for the sleep bar & food chain), logEvent (accepts occurredAt for
                             # backdating), updateEvent, deleteEvent, openSession/closeSession,
                             # logSession (backdated start + optional end), updateSession, deleteSession,
                             # fetchDaily (v_puppy_daily, N days), fetchDayTimeline(dayISO) — date-ranged
@@ -214,10 +230,10 @@ src/
                             # THE WHOLE TAB IS A PAGER (day mode): the header sits outside PuppyPager and
                             # stays put; everything else is page 1 and swipes away to reveal DayTimeline
                             # as page 2. Owns `dayISO` for the timeline.
-                            # Page 1 order: WeightPrompt → Pee/Poop/Meal/Crate full-width stacked (big
+                            # Page 1 order: WeightPrompt → Pee/Poop/Food/Crate full-width stacked (big
                             # sizing) → Walk half-width → SleepCard → Weight (wide row) → FoodCard → TodayCard.
                             # Alone is defined but `hidden: true` (one-line restore).
-                            # Tap = log (pee/poop → LocationChooser, meal → MealSheet, weight → WeightSheet,
+                            # Tap = log (pee/poop → LocationChooser, food → FoodSheet, weight → WeightSheet,
                             # session → open/close toggle). Long-press any card → LogSheet (backdate + edit/delete).
                             # Header shows a smart status line (smartStatus). Successful potty (pad/street) fires a
                             # PawBurst (day mode).
@@ -238,7 +254,9 @@ src/
       LocationChooser.jsx   # 3-button Pad/Street/Accident sheet; × / backdrop cancels (nothing logged).
                             # Exports LocationButtons (the shared button group) + LOCATION_OPTIONS.
       LogSheet.jsx          # Long-press sheet. EVENTS: top logs a NEW backdated entry at a chosen time
-                            # (potty uses LocationButtons; meal = MealFields cups + % eaten; weight lbs);
+                            # (potty uses LocationButtons; food = LeftPctField + CupsField with separate
+                            # Log-check / Put-food-down buttons, amounts of the most recent food row now
+                            # editable via foodDetailPatch + fullLevelBefore; weight lbs);
                             # bottom edits time/notes of the most recent entry, or deletes it.
                             # SESSIONS (crate/walk) are STATE-AWARE: if one is open the sheet leads with
                             # "In crate since 3:04 PM · 1h 20m", then Came-out-at (prefilled now) → End,
@@ -249,12 +267,22 @@ src/
                             # them; all time entry goes through TimeField (time big, date behind a chip). rangeError() validates end>start and rejects future times. The
                             # most-recent edit/delete block is hidden for sessions while one is open.
       WeightSheet.jsx       # Log a weight event ({ lbs }) — used by card + weekly prompt
-      MealSheet.jsx         # Tap-Meal sheet: cups made (1/4 default; 1/4·1/2·3/4·1 chips + a `+` chip
-                            # revealing a decimal field for anything else) + % eaten (default 100, a
-                            # horizontal scroller of 100→0 in 5% steps, overscroll-x-contain so a fling
-                            # doesn't drag PuppyPager). Writes { made_cups, ate_pct }. Older 1/6 and
-                            # { grams } rows still read fine. Exports MealFields (shared with LogSheet),
-                            # chipCls (shared with LogSheet's RelativeChips) + DEFAULT_MADE_CUPS/ATE_PCT.
+      FoodSheet.jsx         # Tap-Food sheet, STATE-AWARE like LogSheet is for an open crate session.
+                            # Food in the bowl → an accent banner ("¼ cup down at 8:12a · about 0.12
+                            # cups left"), then "How much is left?" (Empty chip pinned outside a 100→0
+                            # scroller, opening on the LAST reading) → Save check; below a divider, a
+                            # collapsed "+ Put more food down" that expands to cup chips and REUSES the
+                            # left-% already chosen above, echoing it back ("1/4 cup onto 10% left →
+                            # 0.28 cups in the bowl"). Plus a muted "picked it up (she didn't eat it)"
+                            # link → { removed: true }. Empty bowl → skips the question entirely, just
+                            # cups + Put food down. Exports LeftPctField / CupsField / AddPreview
+                            # (shared with LogSheet) and the button classes. Surfaces save errors —
+                            # the old MealSheet swallowed them, so a failed log looked like a no-op.
+      Chips.jsx             # chipCls + the generic Chips row lifted out of the old MealSheet (TimeField
+                            # and LogSheet's RelativeChips both import chipCls). The scrolling variant
+                            # keeps overscroll-x-contain (a fling must not drag PuppyPager) and now
+                            # scrolls its selected chip into view on mount — the left-% row opens on the
+                            # last reading, not on the first option.
       ProfileSheet.jsx      # Edit puppy_profile (name/dob/target wt/vet); dob drives dynamic pee target
       WeightPrompt.jsx      # Dismissible weekly weigh-in nudge (>7d old); per-day localStorage dismiss
       UndoSnackbar.jsx      # Persistent "Last: Pee, 2m ago — undo" → deleteEvent
@@ -269,14 +297,22 @@ src/
       DayTimeline.jsx       # Vertical 24h track (720px = 1440min) for one day: awake fill + crate sessions as
                             # dark-blue bands (square edges — they're time spans), "now" line on today.
                             # 💧/💩 pills mirror each other either side of the track, each on a leader line
-                            # back to the exact minute; accidents turn the pill red. WALKS ARE DRAWN ON THE
+                            # back to the exact minute; accidents turn the pill red. FOOD IS THE OUTERMOST
+                            # LEFT LANE (outboard of pee): 🍽️+time in accent for a serving going down, a
+                            # bare "50%" in muted for a reading — there isn't lane width for two
+                            # emoji+time pills, and the weight difference matches the meaning. Unlike
+                            # every other lane it is pinned to the CARD EDGE (left-0) and grows inward,
+                            # its leader flex-1 to fill the gap: that keeps it off the hour-guide labels
+                            # in the left gutter and makes the lane self-sizing. Food pills render BEFORE
+                            # the pee/poop pills so those opaque pills occlude the long food leader.
+                            # WALKS ARE DRAWN ON THE
                             # MAIN TRACK in accent (after the crate bands, so a walk wins an overlap), with
                             # their own leader from the walk's midpoint out to a minutes-only pill — same
                             # grammar as pee/poop. Walk pills render BEFORE the pee/poop pills so those
                             # opaque pills occlude the hairline passing behind them.
-                            # Column offsets (TRACK_W/LEADER/WALK_LANE_X) are MEASURED to fit a 390px phone —
-                            # widest poop pill ends at 97px, walk pill starts at 105px and ends 7px inside
-                            # the 167px half-width (measured at 375px: poop ends 248, walk pill 264→302).
+                            # Column offsets (TRACK_W/LEADER/WALK_LANE_X) are MEASURED, at 375px where the
+                            # half-width is 159: pee/poop pills 26→91, walk pill 99→137, food pill pinned
+                            # at the card edge and ≤60px wide (8px clear of pee; 15px at 390px).
                             # Re-measure in the browser before growing any of them. Tap anything →
                             # TimelineEditSheet. Day <select> (last 14 days, Today/Yesterday/…), defaults today.
       TimeField.jsx         # Time-first replacement for <input type="datetime-local"> — same value
@@ -286,9 +322,11 @@ src/
                             # chips + a date input. Reason: iOS opens a whole calendar for
                             # datetime-local, but nearly every edit is "slide it back an hour today".
                             # Used by every time field in LogSheet and TimelineEditSheet.
-      TimelineEditSheet.jsx # Retime or delete one timeline entry — events → updateEvent/deleteEvent,
+      TimelineEditSheet.jsx # Retime or delete one timeline entry (labels 'Food down'/'Food check', with
+                            # foodSummary in the subtitle) — events → updateEvent/deleteEvent,
                             # sessions → updateSession/deleteSession (delete removes start+end together).
-      FoodCard.jsx          # Today's food volume: cups eaten (Σ made_cups·ate_pct) of cups made · N meals
+      FoodCard.jsx          # Today's food, from foodDayTotals: hero = cups PUT DOWN (the number that's
+                            # actually known), with servings · ~eaten · what's left beside it
       TodayCard.jsx         # Potty rollup + trend: big success %, 💧💩⚠️🍽️ chips, 7-day bars (day only)
       PawBurst.jsx          # Paw-print celebration overlay (pawBurst keyframe); self-unmounts ~1s
       Sheet.jsx             # Shared bottom-sheet primitive (backdrop + rounded-top, day/night themed)
@@ -335,14 +373,23 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
   row, ring 44px — Weight). Emoji sits inside a progress ring (SVG) that fills toward the overdue point
   and colors ok/amber/red; active session = full accent ring; overdue = `pupPulse` animation. Status
   border reinforces the ring. 500ms long-press opens the detail sheet.
-- **Tile order (day):** Pee → Poop → Meal → Crate full-width stacked, then Walk at half width; below
+- **Tile order (day):** Pee → Poop → Food → Crate full-width stacked, then Walk at half width; below
   them SleepCard → Weight (wide) → Food → Today. Walk/Alone/Weight show no idle counter.
   All of that is page 1 of the tab-wide pager; the header sits above it and doesn't move.
 - **Timeline:** vertical 24h track (square-edged spans), `pup.sleep`/`pup.awake` fill matching the bar.
   💧 left / 💩 right as mirrored pills on `pup.line` leader lines; accidents turn the pill `pup.red`.
-  `pup.accent` walks drawn on the track itself, with a leader out to a minutes-only pill.
+  `pup.accent` walks drawn on the track itself, with a leader out to a minutes-only pill. Food is the
+  outermost left lane, pinned to the card edge: 🍽️+time in `pup.accent` for a serving, a bare `50%`
+  in `pup.muted` for a reading, both on long leaders that pass *behind* the pee pills.
 - **Header:** serif name + a muted smart status line (`smartStatus`) surfacing the most urgent thing.
 - **Celebration:** `PawBurst` (6 `🐾` via `pawBurst` keyframe) on a successful potty; day mode only.
+- **Food tile, two states:** food in the bowl → accent/active, `50%`, "¼ cup at 8:12a · tap to
+  update". Bowl empty → **`2 of 3` / "scoops today" / "9h 53m since last"** — the ring fills with the
+  day's scoop progress while the border/text colour still comes from the time-since-last meal target,
+  so ring length answers "how much has she had today" and colour answers "is she due". There is no
+  countdown or "Overdue!" wording on this tile; the elapsed time is stated plainly instead.
+- **Food card:** hero is cups **put down** today (what's actually known), with servings · ~eaten ·
+  what's left beside it.
 - **Today card:** single `rounded-2xl` card — big success % (ok/amber/red), icon-chip counts, 7-day bars.
 - **Night mode:** automatic on the device clock — on at 22:00, off at 06:00. The ☀️/🌙 header button
   overrides it for the current period only (`localStorage['puppy-night-override']`), then it reverts to
@@ -350,7 +397,7 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
 
 ## What's Built (Puppy)
 - **Default tab:** the app lands on Poppy — `/dashboard` redirects to `/dashboard/puppy`, Home is `/dashboard/home`.
-- **Realtime care log:** tap-to-log tiles (Pee/Poop/Meal/Crate full-width, Walk small, Weight wide);
+- **Realtime care log:** tap-to-log tiles (Pee/Poop/Food/Crate full-width, Walk small, Weight wide);
   two phones sync live. Alone is defined but hidden.
 - **Potty flow:** pee/poop tap → Pad/Street/Accident chooser (× cancels — nothing logged). Accidents feed success rate.
 - **Sessions:** crate/alone/walk toggle (first tap opens, second closes), live elapsed; DB enforces one open per type.
@@ -377,9 +424,15 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
   lines back to the exact minute, and walks in orange on the track with a leader to a minutes pill.
   Tap any of them to retime or delete it. Live for today via realtime; a day dropdown
   (last 14 days) scopes it to any past day. Labelled ‹ / › buttons under the pager as a non-touch backup.
-- **Food logging:** tapping Meal asks cups made (default 1/4, `+` for a custom amount) + % she ate
-  (a 100→0 scroller in 5% steps, opening on 100%); a Food card sums the day's
-  volume eaten (Σ made_cups·ate_pct) — meal `detail` is `{ made_cups, ate_pct }`.
+- **Food logging is a bowl, not a meal:** you log *putting food down* and *how much is left*, whenever
+  you happen to notice — no waiting around for her to finish. Tapping Food is state-aware: bowl empty →
+  just pick cups; food down → "How much is left?" (Empty + a 100→0 scroller opening on the last
+  reading) with **+ Put more food down** below it reusing that same answer, echoed back as
+  "1/4 cup onto 10% left → 0.28 cups in the bowl". A **picked it up** link zeroes the bowl without
+  crediting the remainder as eaten. Percentages read against the full mark, so ¼ cup → 50% → 10% is
+  0.25 → 0.125 → 0.025. The tile becomes the bowl while food is down (accent, "50%", "¼ cup at 8:12a")
+  and reverts to a `2 of 3` scoop-progress readout once it's empty (3 x 1/4-cup scoops a day, counted
+  by volume — see SCOOP_CUPS/DAILY_SCOOP_TARGET in food.js). Food rows also get their own timeline lane.
 - **Today card:** one merged card — big potty-success %, icon-chip counts, 7-day success-rate bars.
 - **Weekly weigh-in nudge:** dismissible banner when latest weight is >7 days old.
 - **Profile editor:** in-app sheet for name/DOB/target weight/vet (no seeding — user fills it in).
