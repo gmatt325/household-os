@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { todayISO } from '../lib/date.js'
-import { chipCls } from './MealSheet.jsx'
+import { chipCls } from './Chips.jsx'
 
 // Time-first replacement for <input type="datetime-local">. Same value contract
 // — a local 'YYYY-MM-DDTHH:mm' string, or '' for blank — so callers keep passing

@@ -3,11 +3,13 @@ import Sheet from './Sheet.jsx'
 import { toDatetimeLocal, formatClock } from '../lib/date.js'
 import TimeField from './TimeField.jsx'
 import { updateEvent, deleteEvent, updateSession, deleteSession } from '../lib/supabaseQueries.js'
+import { isFoodRow, foodSummary } from '../lib/food.js'
 
 const LABELS = {
   pee: 'Pee',
   poop: 'Poop',
-  meal: 'Meal',
+  meal: 'Food down',
+  food_check: 'Food check',
   weight: 'Weight',
   walk: 'Walk',
   crate: 'Crate',
@@ -125,9 +127,14 @@ export default function TimelineEditSheet({ target, night, onClose, onChanged })
   }
 
   const kindLabel = isAwake ? 'Awake' : LABELS[isSession ? row.session_type : row.event_type] ?? 'Entry'
-  const detail = !isAwake && !isSession && row.detail?.location
-    ? ` · ${LOC_LABEL[row.detail.location] ?? row.detail.location}`
-    : ''
+  const detail =
+    isAwake || isSession
+      ? ''
+      : row.detail?.location
+      ? ` · ${LOC_LABEL[row.detail.location] ?? row.detail.location}`
+      : isFoodRow(row)
+      ? ` · ${foodSummary(row)}`
+      : ''
   const subtitle = isAwake
     ? `${formatClock(awakeStartMs)}–${formatClock(awakeEndMs)}`
     : isSession
