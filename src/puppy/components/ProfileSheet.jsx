@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Sheet from './Sheet.jsx'
 import { upsertProfile } from '../lib/supabaseQueries.js'
+import { setLight, DEFAULT_BRI } from '../lib/hue.js'
 
 // In-app editor for the single puppy_profile row. DOB drives the dynamic pee target.
 export default function ProfileSheet({ profile, night, onClose, onSaved }) {
@@ -10,11 +11,28 @@ export default function ProfileSheet({ profile, night, onClose, onSaved }) {
   const [vetName, setVetName] = useState(profile?.vet_name ?? '')
   const [vetPhone, setVetPhone] = useState(profile?.vet_phone ?? '')
   const [busy, setBusy] = useState(false)
+  const [lightOn, setLightOn] = useState(false)
+  const [lightBusy, setLightBusy] = useState(false)
+  const [lightResult, setLightResult] = useState(null)
 
   const field = night
     ? 'bg-pup-nightbg border-pup-nightline text-pup-nightink'
     : 'bg-white border-pup-line text-pup-ink'
   const labelCls = `text-xs uppercase tracking-widest ${night ? 'text-zinc-500' : 'text-pup-muted'}`
+
+  // Debug toggle. Fires the bridge regardless of night mode or crate state so
+  // reachability can be tested from the phone in broad daylight. Tracks the state
+  // we last SENT rather than reading the light back: one request type means a
+  // failure has exactly one possible cause.
+  async function testLight() {
+    const next = !lightOn
+    setLightBusy(true)
+    setLightResult(null)
+    const res = await setLight({ on: next, bri: DEFAULT_BRI })
+    if (res.ok) setLightOn(next)
+    setLightResult({ ...res, on: next })
+    setLightBusy(false)
+  }
 
   async function save() {
     setBusy(true)
@@ -75,6 +93,26 @@ export default function ProfileSheet({ profile, night, onClose, onSaved }) {
         >
           {busy ? 'Saving…' : 'Save'}
         </button>
+
+        <div className={`mt-2 space-y-2 border-t pt-4 ${night ? 'border-pup-nightline' : 'border-pup-line'}`}>
+          <p className={labelCls}>Debug</p>
+          <button
+            type="button"
+            onClick={testLight}
+            disabled={lightBusy}
+            className="w-full min-h-[56px] rounded-xl border-2 border-pup-accent text-pup-accent text-sm font-semibold uppercase tracking-widest disabled:opacity-50"
+          >
+            {lightBusy ? 'Sending…' : lightOn ? 'Turn light off' : 'Turn light on'}
+          </button>
+          {lightResult && (
+            <p className={`text-sm font-medium ${lightResult.ok ? 'text-pup-ok' : 'text-pup-red'}`}>
+              {lightResult.ok ? `Sent — light ${lightResult.on ? 'on' : 'off'}` : `Failed: ${lightResult.reason}`}
+            </p>
+          )}
+          <p className={`text-xs ${night ? 'text-zinc-500' : 'text-pup-muted'}`}>
+            Ignores night mode. Home WiFi only.
+          </p>
+        </div>
       </div>
     </Sheet>
   )
