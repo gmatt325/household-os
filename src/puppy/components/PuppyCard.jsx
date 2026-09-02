@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useLongPress } from '../hooks/useLongPress.js'
 
 // Emoji sitting inside a progress ring. Ring fills toward the target and shifts
 // green→amber→red; a full accent ring marks an active session; empty track when
@@ -66,46 +66,7 @@ export default function PuppyCard({
   onTap,
   onLongPress,
 }) {
-  const timer = useRef(null)
-  const suppressClick = useRef(false)
-  const startPos = useRef({ x: 0, y: 0 })
-
-  function clear() {
-    clearTimeout(timer.current)
-    timer.current = null
-  }
-
-  // Pointer events drive the LONG-PRESS ONLY. The tap is a plain click on the
-  // <button>, because iOS Safari cancels the pointer stream for any touch that
-  // starts inside a scroll container (every card lives in PuppyPager's snap
-  // scroller) — a pointerup-synthesized tap gets silently dropped, while the
-  // click still fires. Don't move the tap back onto pointerup.
-  function handleDown(e) {
-    if (e.pointerType === 'mouse' && e.button !== 0) return
-    suppressClick.current = false
-    startPos.current = { x: e.clientX, y: e.clientY }
-    timer.current = setTimeout(() => {
-      clear()
-      suppressClick.current = true // swallow the click that trails the press
-      onLongPress?.()
-    }, 500)
-  }
-  function handleMove(e) {
-    if (!timer.current) return
-    const dx = Math.abs(e.clientX - startPos.current.x)
-    const dy = Math.abs(e.clientY - startPos.current.y)
-    // 16px, not 10 — a thumb on a 140px card rolls further than a careful
-    // fingertip on the emoji, which is what made big cards feel dead.
-    if (dx > 16 || dy > 16) clear()
-  }
-  function handleClick() {
-    clear()
-    if (suppressClick.current) {
-      suppressClick.current = false
-      return
-    }
-    onTap?.()
-  }
+  const press = useLongPress(onTap, onLongPress)
 
   const border = active
     ? 'border-pup-accent'
@@ -128,19 +89,6 @@ export default function PuppyCard({
   const primaryColor =
     status === 'red' ? 'text-pup-red' : status === 'amber' ? 'text-pup-amber' : active ? 'text-pup-accent' : ''
 
-  const press = {
-    onClick: handleClick,
-    onPointerDown: handleDown,
-    onPointerMove: handleMove,
-    onPointerUp: clear,
-    onPointerLeave: clear,
-    // Native scrolling takes the gesture over and stops sending pointermove, so
-    // without this the long-press timer survives a swipe and fires mid-scroll.
-    onPointerCancel: clear,
-    onContextMenu: (e) => e.preventDefault(),
-    // Keep the iOS callout/selection out of the long-press gesture.
-    style: { WebkitTouchCallout: 'none' },
-  }
   // readOnly cards (Age) still render as a button for layout parity, but drop
   // the press feedback so they don't look tappable.
   const shell = `select-none touch-manipulation rounded-2xl border-2 text-left transition-colors ${

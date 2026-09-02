@@ -49,3 +49,24 @@ export function toDatetimeLocal(iso) {
 export function weekdayShort(dayISO) {
   return new Date(dayISO + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short' })
 }
+
+// "9/1" — the compact date under a trend-chart bar, where the weekday sits above
+// it and there's room for four characters at most.
+export function shortDate(dayISO) {
+  const d = new Date(dayISO + 'T12:00:00')
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+// "Aug 18" — the wider form used in the trend card's week header.
+export function monthDay(dayISO) {
+  return new Date(dayISO + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+// Calendar-day arithmetic on a YYYY-MM-DD string, staying in local time (a
+// plain 86_400_000ms step lands an hour off across a DST boundary).
+export function shiftDays(dayISO, delta) {
+  const d = new Date(dayISO + 'T12:00:00')
+  d.setDate(d.getDate() + delta)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}

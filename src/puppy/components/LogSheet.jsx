@@ -13,6 +13,7 @@ import {
   updateSession,
   deleteSession,
 } from '../lib/supabaseQueries.js'
+import { endCrateForPotty } from '../lib/crate.js'
 import {
   DEFAULT_ADDED_CUPS,
   logFoodDown,
@@ -61,6 +62,7 @@ export default function LogSheet({
   events, // raw recent events, so an edited food row can be re-based on its own history
   lastSession,
   openSession, // the currently-open session of this type (or null)
+  openCrate, // the open CRATE session, whatever this card is — a backdated potty ends it
   night,
   onClose,
   onChanged,
@@ -157,6 +159,12 @@ export default function LogSheet({
   function createPotty(location) {
     run(async () => {
       await logEvent(card.type, { location }, iso(when))
+      // Ends the crate back at the time she actually went out (and reopens it
+      // if that was a night hour). Swallowed on failure: the event is written,
+      // and run() would otherwise leave the sheet open over a completed log.
+      try {
+        await endCrateForPotty(openCrate, iso(when))
+      } catch {}
       if (location !== 'indoor_accident') onCelebrate?.()
     })
   }

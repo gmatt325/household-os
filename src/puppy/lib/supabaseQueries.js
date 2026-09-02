@@ -196,6 +196,22 @@ export async function closeSession(id) {
   return data
 }
 
+// Close a session at an explicit time, but ONLY while it's still open. The other
+// phone may have ended it already (our snapshot is realtime but not instant), and
+// a blind update would silently stretch that session to now. Returns null when
+// there was nothing open to close.
+export async function closeSessionAt(id, endedAt) {
+  const { data, error } = await supabase
+    .from('puppy_sessions')
+    .update({ ended_at: endedAt })
+    .eq('id', id)
+    .is('ended_at', null)
+    .select('*')
+    .maybeSingle()
+  if (error) throw error
+  return data ?? null
+}
+
 // Backdated session create: explicit started_at, optional ended_at (null = still
 // running). The partial unique index still forbids a 2nd open session per type.
 export async function logSession(sessionType, startedAt, endedAt = null, alone = false) {
@@ -227,12 +243,16 @@ export async function deleteSession(id) {
 }
 
 // ---- Daily rollup + trend (v_puppy_daily) ----
-export async function fetchDaily(days = 7) {
+// A date range rather than "the last N rows": days with no events have no row at
+// all, so a LIMIT can't tell you which calendar days it actually covered — and
+// the trend card pages back through fixed 7-day windows.
+export async function fetchDailyRange(fromISO, toISO) {
   const { data, error } = await supabase
     .from('v_puppy_daily')
     .select('*')
-    .order('day', { ascending: false })
-    .limit(days)
+    .gte('day', fromISO)
+    .lte('day', toISO)
+    .order('day', { ascending: true })
   if (error) throw error
   return data ?? []
 }
