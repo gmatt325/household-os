@@ -49,7 +49,7 @@ A **Puppy tab** also lives alongside — real-time puppy care logging (potty/foo
 
 **Puppy views** (`security_invoker = true`, granted to `authenticated`):
 - `v_puppy_status` — per tracked type: last occurrence, `elapsed_seconds`, `in_crate`, ok/amber/red `status` vs `puppy_targets`. Crate row uses open session (in crate) else last closed session's ended_at (out-of-crate nap timer). NOTE: the client computes live status/elapsed itself from raw last-events + targets (so cards tick without re-querying); this view is a server-side snapshot / debugging aid.
-- `v_puppy_daily` — per LA-calendar day: pee_count, poop_count, accident_count, success_rate, meal_count, crate_minutes, alone_minutes, longest_alone_stretch.
+- `v_puppy_daily` — per LA-calendar day: pee_count, poop_count, accident_count, success_rate, meal_count, crate_minutes, alone_minutes, longest_alone_stretch, **pee_accident_count, poop_accident_count** (the accident split TodayCard reads; appended by `add_potty_accident_split_to_v_puppy_daily` — CREATE OR REPLACE VIEW can only add columns at the END, so any future column goes after these).
 
 ### fitness_weekly_plans day JSONB shape
 Each day entry (new format, ISO date key):
@@ -187,13 +187,24 @@ src/
                             # synced across components (TabNav + page) via a custom window event.
       date.js               # todayISO, formatElapsed (count-up label), formatClock, formatClockShort
                             # ("3:04a" — timeline pills only, where width is the constraint),
-                            # toDatetimeLocal, weekdayShort
+                            # toDatetimeLocal, weekdayShort, shortDate ("9/1", trend bar labels),
+                            # monthDay ("Aug 18", trend week header), shiftDays (local-time day
+                            # arithmetic on a YYYY-MM-DD — a raw 86_400_000ms step is an hour off
+                            # across DST)
       targets.js            # ageInMonths (whole, for display) + ageInMonthsFractional (days/30.44, drives pee
                             # target), dynamicPeeTarget (fractional ~60min/month, clamp 45–240), resolveTargets
                             # (seed + pee override), statusFor → ok|amber|red, progressFor → 0..1 ring,
                             # smartStatus(live, resolved, now, bowl) → header. Food sits out the urgency
                             # race while the bowl isn't empty ("next food in ~2h" is nonsense with food
                             # right there); a pee that's actually due still outranks the bowl.
+      crate.js              # endCrateForPotty(openCrate, atISO) — a potty ends the crate session she's
+                            # in, at the EVENT's time (so a backdated pee ends it back there). During
+                            # night hours (isNightHour — the clock, 22:00–06:00, NOT the ☀️/🌙
+                            # override) it immediately opens a fresh session at that same instant, so
+                            # each row is one clean "she lasted N hours" stretch instead of one 8-hour
+                            # block hiding four wake-ups. No-ops when nothing is open, or when the
+                            # backdate lands before the session started (that would write an
+                            # end-before-start row).
       food.js               # THE BOWL MODEL — the one place food math lives. SCOOP_CUPS (0.25) +
                             # DAILY_SCOOP_TARGET (3) define the day's goal; scoops are counted by
                             # VOLUME (putDownCups / 0.25), so a 1/2-cup pour reads as 2 scoops, not 1.
@@ -213,23 +224,36 @@ src/
                             # open sessions + lastSessionByType + last closed crate + raw events/sessions
                             # arrays for the sleep bar & food chain), logEvent (accepts occurredAt for
                             # backdating), updateEvent, deleteEvent, openSession/closeSession,
+                            # closeSessionAt(id, endedAt) — conditional close (`.is('ended_at', null)`)
+                            # so a stale snapshot can't stretch a session the other phone already ended,
                             # logSession (backdated start + optional end), updateSession, deleteSession,
-                            # fetchDaily (v_puppy_daily, N days), fetchDayTimeline(dayISO) — date-ranged
+                            # fetchDailyRange(fromISO, toISO) (v_puppy_daily over a DATE RANGE — days with
+                            # no events have no row, so a LIMIT can't say which days it covered),
+                            # fetchDayTimeline(dayISO) — date-ranged
                             # events + overlapping sessions for one local day (fetchLive's 100/200 row
                             # caps make it unusable for history)
     hooks/
       usePuppyLive.js       # profile + targets + live snapshot; realtime subscribe→refetch on
                             # puppy_events/puppy_sessions/puppy_profile (same pattern as useTodaysTasks)
-      usePuppyDaily.js      # today rollup + 7-day trend from v_puppy_daily; refetches on changes
+      usePuppyDaily.js      # the last N calendar days of v_puppy_daily rollups (default 84 = the 12
+                            # weeks TodayCard can scroll back), oldest → newest; refetches on changes.
+                            # One query covers every week the strip reaches — paging never re-fetches.
       usePuppyDay.js        # one local day's events + sessions (fetchDayTimeline) + realtime
                             # subscribe→refetch — powers DayTimeline for today and past days
       useNow.js             # ticking clock (1s) driving live count-ups
+      useLongPress.js       # tap + long-press handler props (500ms, 16px move tolerance,
+                            # suppressClick, pointercancel clear), shared by PuppyCard and the
+                            # TodayCard day bars. TAP IS onClick, long-press is pointer-timer driven —
+                            # never the reverse; see the PuppyCard note below for why.
     pages/
       Puppy.jsx             # Index. CARDS entries carry `slot` (full | small | wide), `nightVisible`,
                             # `noTimer` and `hidden` — layout is derived from those, not hardcoded.
                             # THE WHOLE TAB IS A PAGER (day mode): the header sits outside PuppyPager and
                             # stays put; everything else is page 1 and swipes away to reveal DayTimeline
-                            # as page 2. Owns `dayISO` for the timeline.
+                            # as page 2. Owns `dayISO` for the timeline + a ref on PuppyPager so a
+                            # long-pressed day in TodayCard sets the day AND jumps to page 2.
+                            # doLog() runs endCrateForPotty after a pee/poop (its own try — the event
+                            # is already written, so a crate failure must not read as a failed log).
                             # Page 1 order: WeightPrompt → Pee/Poop/Food/Crate full-width stacked (big
                             # sizing) → Walk half-width → SleepCard → Weight (wide row) → FoodCard → TodayCard.
                             # Alone is defined but `hidden: true` (one-line restore).
@@ -253,7 +277,9 @@ src/
                             # A `suppressClick` ref swallows the click that trails a fired long-press.
       LocationChooser.jsx   # 3-button Pad/Street/Accident sheet; × / backdrop cancels (nothing logged).
                             # Exports LocationButtons (the shared button group) + LOCATION_OPTIONS.
-      LogSheet.jsx          # Long-press sheet. EVENTS: top logs a NEW backdated entry at a chosen time
+      LogSheet.jsx          # Takes `openCrate` (the open CRATE session, whatever card it is) so a
+                            # backdated potty ends the crate at the backdated time via endCrateForPotty.
+                            # Long-press sheet. EVENTS: top logs a NEW backdated entry at a chosen time
                             # (potty uses LocationButtons; food = LeftPctField + CupsField with separate
                             # Log-check / Put-food-down buttons, amounts of the most recent food row now
                             # editable via foodDetailPatch + fullLevelBefore; weight lbs);
@@ -294,6 +320,7 @@ src/
                             # would drag content under your finger) and scrolls the window to the pager top on
                             # page change. Labelled ‹ / › buttons + dots below as a backup for non-touch.
                             # Owns page index/scroll — Puppy.jsx re-renders every 1s from useNow, keep it out.
+                            # forwardRef exposes { goTo(i) } so TodayCard's "view timeline" can jump to page 2.
       DayTimeline.jsx       # Vertical 24h track (720px = 1440min) for one day: awake fill + crate sessions as
                             # dark-blue bands (square edges — they're time spans), "now" line on today.
                             # 💧/💩 pills mirror each other either side of the track, each on a leader line
@@ -314,7 +341,9 @@ src/
                             # half-width is 159: pee/poop pills 26→91, walk pill 99→137, food pill pinned
                             # at the card edge and ≤60px wide (8px clear of pee; 15px at 390px).
                             # Re-measure in the browser before growing any of them. Tap anything →
-                            # TimelineEditSheet. Day <select> (last 14 days, Today/Yesterday/…), defaults today.
+                            # TimelineEditSheet. Day <select> (last 14 days, Today/Yesterday/…), defaults
+                            # today; a day arriving from TodayCard that's older than 14 days is folded
+                            # into the options, or the select would render blank.
       TimeField.jsx         # Time-first replacement for <input type="datetime-local"> — same value
                             # contract (local 'YYYY-MM-DDTHH:mm', '' = blank/still-running) so callers
                             # still hand it to new Date(). Big <input type="time"> + a compact
@@ -327,7 +356,15 @@ src/
                             # sessions → updateSession/deleteSession (delete removes start+end together).
       FoodCard.jsx          # Today's food, from foodDayTotals: hero = cups PUT DOWN (the number that's
                             # actually known), with servings · ~eaten · what's left beside it
-      TodayCard.jsx         # Potty rollup + trend: big success %, 💧💩⚠️🍽️ chips, 7-day bars (day only)
+      TodayCard.jsx         # Potty history (day only). Top: the SELECTED day's success % + two pill
+                            # rows — 💧 pees / ⚠️ pee accidents, 💩 poops / ⚠️ poop accidents (no food;
+                            # FoodCard sits right above it). Bottom: 12 rolling 7-day panes in a
+                            # snap-x scroller (overscroll-x-contain, or a fling chains out to
+                            # PuppyPager) opening scrolled to the far right = this week, which is also
+                            # why a reload resets to it; ‹ › arrows scrollBy one pane. Every bar is a
+                            # button: tap selects the day (stats above swap), long-press → a Sheet
+                            # offering "View timeline" → onOpenTimeline(day). Labels are weekday over
+                            # M/D.
       PawBurst.jsx          # Paw-print celebration overlay (pawBurst keyframe); self-unmounts ~1s
       Sheet.jsx             # Shared bottom-sheet primitive (backdrop + rounded-top, day/night themed)
 ```
@@ -390,7 +427,9 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
   countdown or "Overdue!" wording on this tile; the elapsed time is stated plainly instead.
 - **Food card:** hero is cups **put down** today (what's actually known), with servings · ~eaten ·
   what's left beside it.
-- **Today card:** single `rounded-2xl` card — big success % (ok/amber/red), icon-chip counts, 7-day bars.
+- **Potty card (TodayCard):** single `rounded-2xl` card — the selected day's big success %
+  (ok/amber/red), two pill rows (pee + pee accidents, poop + poop accidents), and a week-by-week bar
+  strip. Selected bar takes `ring-2 ring-pup-accent`; its labels go bold ink.
 - **Night mode:** automatic on the device clock — on at 22:00, off at 06:00. The ☀️/🌙 header button
   overrides it for the current period only (`localStorage['puppy-night-override']`), then it reverts to
   automatic. Never keys off system theme. Shows only Pee/Poop/Crate, no bottom cards / prompt.
@@ -433,7 +472,12 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
   0.25 → 0.125 → 0.025. The tile becomes the bowl while food is down (accent, "50%", "¼ cup at 8:12a")
   and reverts to a `2 of 3` scoop-progress readout once it's empty (3 x 1/4-cup scoops a day, counted
   by volume — see SCOOP_CUPS/DAILY_SCOOP_TARGET in food.js). Food rows also get their own timeline lane.
-- **Today card:** one merged card — big potty-success %, icon-chip counts, 7-day success-rate bars.
+- **Potty history card:** big success % + pee/poop counts with their own accident counts, for whichever
+  day is selected. The bar strip swipes (or arrows) back 12 weeks, labelled weekday over `9/1`; every day
+  is tappable, and a long-press offers to open that day on the timeline. Resets to this week + today on reload.
+- **Potty ends the crate:** logging a pee or poop while a crate session is running closes it — at night
+  (22:00–06:00 on the clock) it reopens one at the same instant, so the crate rows read as
+  "she lasted N hours" between wake-ups. Backdated potty logs end it at the backdated time.
 - **Weekly weigh-in nudge:** dismissible banner when latest weight is >7 days old.
 - **Profile editor:** in-app sheet for name/DOB/target weight/vet (no seeding — user fills it in).
 - **Night mode:** automatic 22:00–06:00, stripped-down dark view for 3am potty runs; the ☀️/🌙 button

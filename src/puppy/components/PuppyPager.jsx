@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 
 const navBtn =
   'flex min-h-[44px] items-center gap-1.5 rounded-xl border-2 border-pup-accent px-4 text-xs font-semibold uppercase tracking-widest text-pup-accent transition-opacity disabled:opacity-25'
@@ -8,7 +8,10 @@ const navBtn =
 // are hidden globally. The container takes the active page's height (the two
 // differ a lot, so lerping it would drag content under your finger mid-swipe)
 // and the window scrolls back to the top whenever the page changes.
-export default function PuppyPager({ labels, children }) {
+// Page index and scroll position stay in here on purpose: Puppy.jsx re-renders
+// every second off useNow, so it must not own them. `goTo` is exposed on a ref
+// for the few places that need to jump pages (the trend card's timeline hold).
+function PuppyPager({ labels, children }, ref) {
   const scrollRef = useRef(null)
   const pageRefs = useRef([])
   const [index, setIndex] = useState(0)
@@ -78,6 +81,8 @@ export default function PuppyPager({ labels, children }) {
     const top = el.getBoundingClientRect().top + window.scrollY
     if (window.scrollY > top) window.scrollTo({ top, behavior: 'smooth' })
   }, [index])
+
+  useImperativeHandle(ref, () => ({ goTo }))
 
   function goTo(i) {
     const el = scrollRef.current
@@ -150,3 +155,5 @@ export default function PuppyPager({ labels, children }) {
     </div>
   )
 }
+
+export default forwardRef(PuppyPager)

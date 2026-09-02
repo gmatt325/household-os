@@ -68,7 +68,18 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
   const { events, sessions, dayStartMs, dayEndMs, loading, error, refetch } = usePuppyDay(dayISO)
   const [editing, setEditing] = useState(null) // { kind: 'event'|'session', row }
 
-  const options = useMemo(() => dayOptions(14), [])
+  // A day picked from the trend card can be older than the 14-day list, which
+  // would leave the <select> rendering blank — fold it in when it's missing.
+  const options = useMemo(() => {
+    const list = dayOptions(14)
+    if (list.some((o) => o.iso === dayISO)) return list
+    const label = new Date(dayISO + 'T12:00:00').toLocaleDateString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    })
+    return [...list, { iso: dayISO, label }].sort((a, b) => (a.iso < b.iso ? 1 : -1))
+  }, [dayISO])
   const isToday = dayISO === todayISO()
 
   const pct = (min) => `${(min / SLEEP_DAY_MIN) * 100}%`

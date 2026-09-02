@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
-import { fetchDaily } from '../lib/supabaseQueries.js'
+import { fetchDailyRange } from '../lib/supabaseQueries.js'
+import { todayISO, shiftDays } from '../lib/date.js'
 
-// Today's rollup + the last `days` of daily stats for the trend chart. Refetches
-// on any event/session change so the rollup stays live.
-export function usePuppyDaily(days = 7) {
+// The last `days` calendar days of rollups (v_puppy_daily), oldest → newest.
+// The whole span the trend card can scroll back through is loaded in one query —
+// ~84 rows — so paging between weeks never hits the network. Refetches on any
+// event/session change so today's numbers stay live.
+export function usePuppyDaily(days = 84) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
 
   const refetch = useCallback(async () => {
     try {
-      setRows(await fetchDaily(days))
+      const to = todayISO()
+      setRows(await fetchDailyRange(shiftDays(to, -(days - 1)), to))
     } catch {
       // Non-critical; leave prior rows in place.
     } finally {

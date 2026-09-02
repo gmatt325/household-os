@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNightMode } from '../lib/nightMode.js'
 import { useNow } from '../hooks/useNow.js'
 import { usePuppyLive } from '../hooks/usePuppyLive.js'
@@ -8,6 +8,7 @@ import { bowlState, foodDayTotals, formatCups, formatScoops, DAILY_SCOOP_TARGET 
 import { formatElapsed, formatClock, todayISO } from '../lib/date.js'
 import { formatAge } from '../lib/age.js'
 import { logEvent, deleteEvent, openSession, closeSession } from '../lib/supabaseQueries.js'
+import { endCrateForPotty } from '../lib/crate.js'
 import PuppyCard from '../components/PuppyCard.jsx'
 import LocationChooser from '../components/LocationChooser.jsx'
 import LogSheet from '../components/LogSheet.jsx'
@@ -44,7 +45,7 @@ export default function Puppy() {
   const [night, toggleNight] = useNightMode()
   const now = useNow(1000)
   const { profile, targets, live, loading, error, refetch } = usePuppyLive()
-  const { rows } = usePuppyDaily(7)
+  const { rows } = usePuppyDaily(84) // 12 weeks — the whole span the trend card scrolls
 
   const [chooser, setChooser] = useState(null) // { type, label }
   const [logCard, setLogCard] = useState(null) // card object for the long-press LogSheet
@@ -55,9 +56,9 @@ export default function Puppy() {
   const [dayISO, setDayISO] = useState(todayISO) // selected day on the timeline page
   const [burst, setBurst] = useState(0) // bump to replay the paw-burst; 0 = hidden
   const [actionErr, setActionErr] = useState(null) // failed tap — surfaced under the header
+  const pagerRef = useRef(null) // lets the trend card jump to the timeline page
 
   const resolved = resolveTargets(targets, profile?.dob)
-  const todayRow = rows.find((r) => r.day === todayISO()) ?? rows[0] ?? null
   const lastWeightAt = live.lastByType.weight?.occurred_at ?? null
   const bowl = bowlState(live.events)
   const midnightMs = new Date(now).setHours(0, 0, 0, 0)
@@ -70,14 +71,26 @@ export default function Puppy() {
   }
 
   async function doLog(type, label, detailObj = null) {
+    let row
     try {
-      const row = await logEvent(type, detailObj)
+      row = await logEvent(type, detailObj)
       setUndo({ id: row.id, label, at: row.occurred_at })
       setActionErr(null)
-      refetch()
     } catch {
       setActionErr(`Couldn't log ${label.toLowerCase()} — try again.`)
+      return
     }
+    // A potty break gets her out of the crate (and at night straight back in).
+    // Its own try: the event is already written, so a crate failure must not
+    // read as "the pee didn't log".
+    if (type === 'pee' || type === 'poop') {
+      try {
+        await endCrateForPotty(live.openByType.crate)
+      } catch {
+        setActionErr("Logged, but couldn't end the crate session.")
+      }
+    }
+    refetch()
   }
 
   async function handleUndo() {
@@ -335,7 +348,7 @@ export default function Puppy() {
           ) : (
             // The whole tab is a pager — swipe and everything below the header
             // slides away to reveal the timeline.
-            <PuppyPager labels={['Poppy', 'Timeline']}>
+            <PuppyPager ref={pagerRef} labels={['Poppy', 'Timeline']}>
               <div>
                 <div className="mb-4">
                   <WeightPrompt lastWeightAt={lastWeightAt} night={night} onLogged={refetch} />
@@ -357,7 +370,13 @@ export default function Puppy() {
                   <SleepCard sessions={live.sessions} now={now} />
                   {wideCards.map((card) => renderCard(card, { wide: true }))}
                   <FoodCard totals={todayFood} />
-                  <TodayCard today={todayRow} rows={rows} />
+                  <TodayCard
+                    rows={rows}
+                    onOpenTimeline={(day) => {
+                      setDayISO(day)
+                      pagerRef.current?.goTo(1)
+                    }}
+                  />
                 </div>
               </div>
 
@@ -390,6 +409,7 @@ export default function Puppy() {
           bowl={bowl}
           events={live.events}
           lastSession={live.lastSessionByType?.[logCard.type] ?? null}
+          openCrate={live.openByType.crate ?? null}
           openSession={live.openByType[logCard.type] ?? null}
           night={night}
           onClose={() => setLogCard(null)}
