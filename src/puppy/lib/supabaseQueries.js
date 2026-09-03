@@ -131,6 +131,20 @@ export async function fetchDayTimeline(dayISO) {
   }
 }
 
+// ---- Weight history ----
+// Every weight ever logged, oldest → newest, for the growth chart. No limit on
+// purpose: these are weekly weigh-ins, so the whole history is a few dozen rows
+// even years out — far cheaper than paging it.
+export async function fetchWeightHistory() {
+  const { data, error } = await supabase
+    .from('puppy_events')
+    .select('id, occurred_at, detail')
+    .eq('event_type', 'weight')
+    .order('occurred_at', { ascending: true })
+  if (error) throw error
+  return data ?? []
+}
+
 // Most recent single event of a type (used to resolve the "undo last" target).
 export async function fetchLastEvent(eventType) {
   const { data, error } = await supabase

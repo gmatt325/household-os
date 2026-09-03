@@ -3,8 +3,8 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 const navBtn =
   'flex min-h-[44px] items-center gap-1.5 rounded-xl border-2 border-pup-accent px-4 text-xs font-semibold uppercase tracking-widest text-pup-accent transition-opacity disabled:opacity-25'
 
-// Two-page horizontal pager for the whole tab: swipe and the entire surface
-// moves. Native scroll-snap does the gesture work — no library, and scrollbars
+// Horizontal pager for the whole tab: swipe and the entire surface moves. Takes
+// as many pages as it's given children. Native scroll-snap does the gesture work — no library, and scrollbars
 // are hidden globally. The container takes the active page's height (the two
 // differ a lot, so lerping it would drag content under your finger mid-swipe)
 // and the window scrolls back to the top whenever the page changes.
@@ -119,10 +119,12 @@ function PuppyPager({ labels, children }, ref) {
         ))}
       </div>
 
-      {/* Backup nav for pointers that can't swipe. Dots show where you are. */}
+      {/* Backup nav for pointers that can't swipe: each button names the page it
+          takes you to. Both are disabled at the ends, so the out-of-range label
+          lookup never renders. Dots show where you are. */}
       <div className="mt-4 flex items-center justify-between gap-3">
         <button type="button" onClick={() => goTo(index - 1)} disabled={index === 0} className={navBtn}>
-          <span aria-hidden="true">‹</span> {labels[0]}
+          <span aria-hidden="true">‹</span> {labels[index - 1]}
         </button>
 
         <div className="flex items-center gap-2">
@@ -149,7 +151,7 @@ function PuppyPager({ labels, children }, ref) {
           disabled={index === count - 1}
           className={navBtn}
         >
-          {labels[count - 1]} <span aria-hidden="true">›</span>
+          {labels[index + 1]} <span aria-hidden="true">›</span>
         </button>
       </div>
     </div>

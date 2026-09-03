@@ -62,7 +62,6 @@ export default function PuppyCard({
   night = false,
   big = false,
   wide = false,
-  readOnly = false,
   onTap,
   onLongPress,
 }) {
@@ -89,11 +88,7 @@ export default function PuppyCard({
   const primaryColor =
     status === 'red' ? 'text-pup-red' : status === 'amber' ? 'text-pup-amber' : active ? 'text-pup-accent' : ''
 
-  // readOnly cards (Age) still render as a button for layout parity, but drop
-  // the press feedback so they don't look tappable.
-  const shell = `select-none touch-manipulation rounded-2xl border-2 text-left transition-colors ${
-    readOnly ? 'cursor-default' : 'active:scale-[0.98]'
-  } ${border} ${surface}`
+  const shell = `select-none touch-manipulation rounded-2xl border-2 text-left transition-colors active:scale-[0.98] ${border} ${surface}`
   const labelCls = `text-[11px] uppercase tracking-widest ${night ? 'text-zinc-500' : 'text-pup-muted'}`
 
   // Short horizontal row — used for cards that carry a value rather than a timer.

@@ -3,9 +3,10 @@ import { useNightMode } from '../lib/nightMode.js'
 import { useNow } from '../hooks/useNow.js'
 import { usePuppyLive } from '../hooks/usePuppyLive.js'
 import { usePuppyDaily } from '../hooks/usePuppyDaily.js'
+import { useWeightHistory } from '../hooks/useWeightHistory.js'
 import { resolveTargets, statusFor, progressFor, smartStatus } from '../lib/targets.js'
 import { bowlState, foodDayTotals, formatCups, formatScoops, DAILY_SCOOP_TARGET } from '../lib/food.js'
-import { formatElapsed, formatClock, todayISO } from '../lib/date.js'
+import { formatElapsed, formatClock, todayISO, monthDay, weekdayShort } from '../lib/date.js'
 import { formatAge } from '../lib/age.js'
 import { logEvent, deleteEvent, openSession, closeSession } from '../lib/supabaseQueries.js'
 import { endCrateForPotty } from '../lib/crate.js'
@@ -21,6 +22,7 @@ import PuppyPager from '../components/PuppyPager.jsx'
 import DayTimeline from '../components/DayTimeline.jsx'
 import FoodCard from '../components/FoodCard.jsx'
 import FoodSheet from '../components/FoodSheet.jsx'
+import WeightChart from '../components/WeightChart.jsx'
 import PawBurst from '../components/PawBurst.jsx'
 import WeightPrompt from '../components/WeightPrompt.jsx'
 
@@ -28,16 +30,21 @@ import WeightPrompt from '../components/WeightPrompt.jsx'
 // high-frequency ones), 'small' = half-width, 'wide' = short horizontal row
 // below the sleep pager. `nightVisible` marks the three kept in night mode.
 // `noTimer` cards never show an idle "time since" — a running session still
-// counts up. `hidden` keeps a card defined but off the grid. `kind: 'info'`
-// cards are derived read-outs, not log buttons — `static` strips their handlers.
+// counts up. `hidden` keeps a card defined but off the grid. `simple` marks an
+// event with no detail to collect, so a tap logs it outright. `kind: 'info'`
+// cards are derived read-outs rather than logs — they still take a tap, but
+// handleTap/handleLongPress route them somewhere of their own.
 const CARDS = [
   { kind: 'event', type: 'pee', emoji: '💧', label: 'Pee', chooseLocation: true, nightVisible: true, slot: 'full' },
   { kind: 'event', type: 'poop', emoji: '💩', label: 'Poop', chooseLocation: true, nightVisible: true, slot: 'full' },
   { kind: 'event', type: 'meal', emoji: '🍽️', label: 'Food', slot: 'full' },
   { kind: 'session', type: 'crate', emoji: '🛏️', label: 'Crate', nightVisible: true, slot: 'full' },
   { kind: 'session', type: 'walk', emoji: '🐾', label: 'Walk', slot: 'small', noTimer: true },
-  { kind: 'info', type: 'age', emoji: '🎂', label: 'Age', special: 'age', slot: 'small', static: true },
+  { kind: 'event', type: 'vomit', emoji: '🤮', label: 'Vomit', simple: true, slot: 'small' },
   { kind: 'session', type: 'alone', emoji: '🏠', label: 'Alone', secondsTimer: true, noTimer: true, slot: 'small', hidden: true },
+  // Age sits directly above Weight — both are values you read, not timers, so
+  // they share the short `wide` row rather than a tile in the tap grid.
+  { kind: 'info', type: 'age', emoji: '🎂', label: 'Age', special: 'age', slot: 'wide' },
   { kind: 'event', type: 'weight', emoji: '⚖️', label: 'Weight', special: 'weight', slot: 'wide', noTimer: true },
 ]
 
@@ -46,6 +53,7 @@ export default function Puppy() {
   const now = useNow(1000)
   const { profile, targets, live, loading, error, refetch } = usePuppyLive()
   const { rows } = usePuppyDaily(84) // 12 weeks — the whole span the trend card scrolls
+  const { rows: weights, loading: weightsLoading } = useWeightHistory()
 
   const [chooser, setChooser] = useState(null) // { type, label }
   const [logCard, setLogCard] = useState(null) // card object for the long-press LogSheet
@@ -56,6 +64,7 @@ export default function Puppy() {
   const [dayISO, setDayISO] = useState(todayISO) // selected day on the timeline page
   const [burst, setBurst] = useState(0) // bump to replay the paw-burst; 0 = hidden
   const [actionErr, setActionErr] = useState(null) // failed tap — surfaced under the header
+  const [showBirthday, setShowBirthday] = useState(false) // age card flipped; never persisted, so a reload shows her age
   const pagerRef = useRef(null) // lets the trend card jump to the timeline page
 
   const resolved = resolveTargets(targets, profile?.dob)
@@ -63,6 +72,9 @@ export default function Puppy() {
   const bowl = bowlState(live.events)
   const midnightMs = new Date(now).setHours(0, 0, 0, 0)
   const todayFood = foodDayTotals(live.events, midnightMs)
+  const todayVomits = live.events.filter(
+    (e) => e.event_type === 'vomit' && new Date(e.occurred_at).getTime() >= midnightMs,
+  ).length
   const statusLine = smartStatus(live, resolved, now, bowl)
 
   function celebrate() {
@@ -104,6 +116,11 @@ export default function Puppy() {
   }
 
   async function handleTap(card) {
+    // The age card is a read-out, not a log: tapping flips it to her birthday.
+    if (card.special === 'age') {
+      setShowBirthday((v) => !v)
+      return
+    }
     if (card.kind === 'session') {
       const open = live.openByType[card.type]
       try {
@@ -138,6 +155,12 @@ export default function Puppy() {
   }
 
   function handleLongPress(card) {
+    // Age has nothing to backdate — LogSheet would render an empty shell — and
+    // the profile is where her birthday is actually edited.
+    if (card.special === 'age') {
+      setProfileOpen(true)
+      return
+    }
     // Long-press any card → backdate/log sheet (also edits the most recent entry).
     setLogCard(card)
   }
@@ -148,11 +171,22 @@ export default function Puppy() {
     // unhandled kind would fall through to the event path and look up a
     // lastByType entry that will never exist.
     if (card.kind === 'info' && card.special === 'age') {
-      const age = formatAge(profile?.dob, now)
       const base = { active: false, status: 'neutral', progress: null }
+      if (!profile?.dob) return { ...base, primary: '—', secondary: 'Set her birthday in profile' }
+      if (showBirthday) {
+        return {
+          ...base,
+          label: 'Birthday',
+          primary: monthDay(profile.dob),
+          secondary: `born ${weekdayShort(profile.dob)} · ${profile.dob.slice(0, 4)}`,
+        }
+      }
+      // The `wide` row has no separate unit line, so it rides along with the
+      // number: "12 weeks", "5 months", "1y 2mo old".
+      const age = formatAge(profile.dob, now)
       return age
-        ? { ...base, primary: age.primary, unit: age.unit, secondary: age.detail }
-        : { ...base, primary: '—', unit: null, secondary: 'Set her birthday in profile' }
+        ? { ...base, primary: `${age.primary} ${age.unit}`, secondary: age.detail }
+        : { ...base, primary: '—', secondary: 'Set her birthday in profile' }
     }
     if (card.kind === 'session') {
       const open = live.openByType[card.type]
@@ -202,6 +236,20 @@ export default function Puppy() {
         progress: 1,
         primary: `${bowl.leftPct ?? 0}%`,
         secondary: `${formatCups(bowl.lastDown?.addedCups ?? 0)} cup at ${formatClock(bowl.downAt)} · tap to update`,
+      }
+    }
+
+    // Vomit: the useful number is how many times today, not how long it's been —
+    // there's no target row for it, so no countdown, no amber/red, no ring fill.
+    if (card.type === 'vomit') {
+      const last = live.lastByType.vomit
+      return {
+        active: false,
+        status: 'neutral',
+        progress: null,
+        primary: String(todayVomits),
+        unit: 'today',
+        secondary: last ? `last at ${formatClock(last.occurred_at)}` : 'Tap to log',
       }
     }
 
@@ -265,7 +313,7 @@ export default function Puppy() {
       <PuppyCard
         key={`${card.kind}-${card.type}`}
         emoji={card.emoji}
-        label={card.label}
+        label={v.label ?? card.label}
         primary={v.primary}
         unit={v.unit}
         secondary={v.secondary}
@@ -273,9 +321,8 @@ export default function Puppy() {
         active={v.active}
         progress={v.progress}
         night={night}
-        readOnly={card.static}
-        onTap={card.static ? undefined : () => handleTap(card)}
-        onLongPress={card.static ? undefined : () => handleLongPress(card)}
+        onTap={() => handleTap(card)}
+        onLongPress={() => handleLongPress(card)}
         {...extra}
       />
     )
@@ -348,7 +395,7 @@ export default function Puppy() {
           ) : (
             // The whole tab is a pager — swipe and everything below the header
             // slides away to reveal the timeline.
-            <PuppyPager ref={pagerRef} labels={['Poppy', 'Timeline']}>
+            <PuppyPager ref={pagerRef} labels={['Poppy', 'Timeline', 'Weight']}>
               <div>
                 <div className="mb-4">
                   <WeightPrompt lastWeightAt={lastWeightAt} night={night} onLogged={refetch} />
@@ -381,6 +428,8 @@ export default function Puppy() {
               </div>
 
               <DayTimeline dayISO={dayISO} onDayChange={setDayISO} now={now} night={night} />
+
+              <WeightChart rows={weights} profile={profile} loading={weightsLoading} />
             </PuppyPager>
           )}
         </>
