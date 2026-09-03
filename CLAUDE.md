@@ -45,7 +45,7 @@ A **Puppy tab** also lives alongside — real-time puppy care logging (potty/foo
 - `puppy_profile` — id, name, dob, target_weight_lbs, vet_name, vet_phone, notes, created_at. Single row; `dob` drives the dynamic pee target.
 - `puppy_events` — id, event_type (`puppy_event_type`), occurred_at (editable, for backdate), detail (JSONB), notes, created_at. `detail` conventions: pee/poop → `{ "location": "pad" | "street" | "indoor_accident" }` (indoor_accident = failure; pad/street = success); food is a **bowl with a running level** — `meal` = food went down `{ "added_cups": 0.25, "left_pct": 10, "bowl_cups": 0.275 }`, `food_check` = a reading `{ "left_pct": 50, "bowl_cups": 0.1375 }` (plus `"removed": true` when the bowl was picked up rather than eaten); weight → `{ "lbs": 4.2 }`. **`left_pct` is read against the FULL MARK** — the level right after food last went down — so "¼ cup, then 50% left, then 10% left" is 0.25 → 0.125 → 0.025, not compounded. `bowl_cups` is absolute and computed at write time, which is what lets one row be edited or deleted without corrupting the rest of the chain. Legacy meals `{ "made_cups", "ate_pct" }` (and older `{ "grams" }`) are still read via a compat branch in `normalizeFoodRow`; nothing was backfilled.
 - `puppy_sessions` — id, session_type (`puppy_session_type`: crate | alone | walk), started_at, ended_at (null = in progress), alone (bool), notes, created_at. Partial unique index `puppy_sessions_one_open_per_type` enforces at most one open session per type. Crate, Alone, and Walk are all start/stop timers.
-- `puppy_targets` — id, event_type (text), target_minutes (→ amber), overdue_minutes (→ red), active. Seeded: pee 90/120, poop 240/360, meal 240/300, crate 120/180, weight 10080/10080. **`weight` is `active = false`** — the Weight tile shows the last logged value, never a countdown. `walk`/`alone` have no rows at all (also no counters). Pee is overridden dynamically from age in the client (fractional age × ~60 min/month — smooth ramp, clamped 45–240 min).
+- `puppy_targets` — id, event_type (text), target_minutes (→ amber), overdue_minutes (→ red), active. Seeded: pee 90/120, poop 240/360, meal 240/300, crate 120/180, weight 10080/10080. **`weight` is `active = false`** — the Weight tile shows the last logged value, never a countdown. `walk`/`alone`/`vomit` have no rows at all (also no counters). Pee is overridden dynamically from age in the client (fractional age × ~60 min/month — smooth ramp, clamped 45–240 min).
 
 **Puppy views** (`security_invoker = true`, granted to `authenticated`):
 - `v_puppy_status` — per tracked type: last occurrence, `elapsed_seconds`, `in_crate`, ok/amber/red `status` vs `puppy_targets`. Crate row uses open session (in crate) else last closed session's ended_at (out-of-crate nap timer). NOTE: the client computes live status/elapsed itself from raw last-events + targets (so cards tick without re-querying); this view is a server-side snapshot / debugging aid.
@@ -69,7 +69,7 @@ Old format used `label` instead of `workout` and `exercises[]` with `duration`/`
 ### Enums
 - `task_category`: puppy | todos | workouts | plant_watering
 - `assigned_to`: grant | ishita | both
-- `puppy_event_type`: pee | poop | meal | food_check | walk | training | play | meds | vet | weight (`meal` now means "a serving went down", so `v_puppy_daily.meal_count` counts servings and `food_check` rows never inflate it) (walk is logged as a **session**, not an event — 3 historical `walk` event rows from 2026-07-20 are left in place but nothing writes new ones)
+- `puppy_event_type`: pee | poop | meal | food_check | walk | training | play | meds | vet | weight | vomit (`meal` now means "a serving went down", so `v_puppy_daily.meal_count` counts servings and `food_check` rows never inflate it) (walk is logged as a **session**, not an event — 3 historical `walk` event rows from 2026-07-20 are left in place but nothing writes new ones). `vomit` (added by `add_vomit_to_puppy_event_type`) carries **no detail at all** — the timestamp is the whole entry — and has no `puppy_targets` row, so it never counts down.
 - `puppy_session_type`: crate | alone | walk
 
 ### Realtime
@@ -205,6 +205,17 @@ src/
                             # block hiding four wake-ups. No-ops when nothing is open, or when the
                             # backdate lands before the session started (that would write an
                             # end-before-start row).
+      growth.js             # THE GROWTH MODEL — the one place "how big will she get" lives.
+                            # GROWTH_ANCHORS = fraction-of-adult-weight by age in months (small breed,
+                            # done at ADULT_AGE_MONTHS = 12), interpolated by growthFraction.
+                            # estimateAdult(rows, dob, targetLbs) → { low, mid, high, from }: divides
+                            # each logged weight by the fraction for its age, recency-weights the
+                            # results, and spreads ±15% (widened to cover the points). Falls back to
+                            # profile.target_weight_lbs ±15% under 2 usable logs. target_weight_lbs is
+                            # deliberately NOT blended into the estimate — it's drawn as its own goal
+                            # line, which is the only way the chart can say she's tracking above it.
+                            # bandSamples() samples the band for the SVG. CHART_DOMAIN_MONTHS = 18 so
+                            # the curve visibly flattens past adulthood.
       food.js               # THE BOWL MODEL — the one place food math lives. SCOOP_CUPS (0.25) +
                             # DAILY_SCOOP_TARGET (3) define the day's goal; scoops are counted by
                             # VOLUME (putDownCups / 0.25), so a 1/2-cup pour reads as 2 scoops, not 1.
@@ -238,6 +249,8 @@ src/
       usePuppyDaily.js      # the last N calendar days of v_puppy_daily rollups (default 84 = the 12
                             # weeks TodayCard can scroll back), oldest → newest; refetches on changes.
                             # One query covers every week the strip reaches — paging never re-fetches.
+      useWeightHistory.js   # every weight event, oldest → newest (fetchWeightHistory — no limit;
+                            # weekly weigh-ins are a few dozen rows) + realtime subscribe→refetch
       usePuppyDay.js        # one local day's events + sessions (fetchDayTimeline) + realtime
                             # subscribe→refetch — powers DayTimeline for today and past days
       useNow.js             # ticking clock (1s) driving live count-ups
@@ -247,7 +260,9 @@ src/
                             # never the reverse; see the PuppyCard note below for why.
     pages/
       Puppy.jsx             # Index. CARDS entries carry `slot` (full | small | wide), `nightVisible`,
-                            # `noTimer` and `hidden` — layout is derived from those, not hardcoded.
+                            # `noTimer`, `simple` and `hidden` — layout is derived from those, not
+                            # hardcoded. `simple` = an event with no detail to collect (Vomit), so a tap
+                            # logs it outright and LogSheet shows a bare time field + one button.
                             # THE WHOLE TAB IS A PAGER (day mode): the header sits outside PuppyPager and
                             # stays put; everything else is page 1 and swipes away to reveal DayTimeline
                             # as page 2. Owns `dayISO` for the timeline + a ref on PuppyPager so a
@@ -255,10 +270,17 @@ src/
                             # doLog() runs endCrateForPotty after a pee/poop (its own try — the event
                             # is already written, so a crate failure must not read as a failed log).
                             # Page 1 order: WeightPrompt → Pee/Poop/Food/Crate full-width stacked (big
-                            # sizing) → Walk half-width → SleepCard → Weight (wide row) → FoodCard → TodayCard.
-                            # Alone is defined but `hidden: true` (one-line restore).
+                            # sizing) → Walk + Vomit half-width → SleepCard → Age (wide) → Weight (wide)
+                            # → FoodCard → TodayCard. Alone is defined but `hidden: true` (one-line restore).
+                            # THREE pager pages now: page 1, DayTimeline, WeightChart.
+                            # The AGE card is `kind: 'info'` and logs nothing, but it does take both
+                            # gestures: TAP flips age ⇄ birthday (state only, so a reload is always back
+                            # on age), LONG-PRESS opens ProfileSheet. Both are routed explicitly at the
+                            # top of handleTap/handleLongPress — falling through would hand an `info`
+                            # card to LogSheet, which renders an empty shell for it.
                             # Tap = log (pee/poop → LocationChooser, food → FoodSheet, weight → WeightSheet,
-                            # session → open/close toggle). Long-press any card → LogSheet (backdate + edit/delete).
+                            # session → open/close toggle, vomit → straight to doLog). Long-press any card
+                            # → LogSheet (backdate + edit/delete).
                             # Header shows a smart status line (smartStatus). Successful potty (pad/street) fires a
                             # PawBurst (day mode).
                             # Night mode: only Pee/Poop/Crate, big cards, no bottom cards/prompt.
@@ -268,7 +290,10 @@ src/
                             # accent + full ring when a session is active, pulses when overdue.
                             # Variants: `big` (min-h 140, ring 64, text-4xl), `wide` (short horizontal
                             # row, min-h 84 — ring+label left, value right). `primary={null}` renders no
-                            # number at all (Walk/Alone idle, Weight).
+                            # number at all (Walk/Alone idle, Weight). NOTE the `wide` variant renders
+                            # `unit` NOWHERE — a wide card wanting one folds it into `primary` (the Age
+                            # card's "12 weeks"). cardView may also return `label` to override the
+                            # card's own (Age → "Birthday" when flipped).
                             # TAP IS onClick, NOT pointerup — the cards live inside PuppyPager's snap
                             # scroller and iOS Safari fires pointercancel for touches there, which silently
                             # killed a pointerup-synthesized tap everywhere but a pinpoint press (the old
@@ -313,8 +338,10 @@ src/
       WeightPrompt.jsx      # Dismissible weekly weigh-in nudge (>7d old); per-day localStorage dismiss
       UndoSnackbar.jsx      # Persistent "Last: Pee, 2m ago — undo" → deleteEvent
       SleepCard.jsx         # Asleep(=in crate)/awake totals + fixed 24h track bar (dark/light blue, now marker)
-      PuppyPager.jsx        # Generic 2-page horizontal pager for the WHOLE tab (CSS scroll-snap, no
-                            # library): takes `labels` + two children. Full-bleed via -mx-4/md:-mx-6 with
+      PuppyPager.jsx        # Generic N-page horizontal pager for the WHOLE tab (CSS scroll-snap, no
+                            # library): takes `labels` + one child per page (3 today: cards, timeline,
+                            # weight). The ‹ / › buttons name the ADJACENT page (labels[index∓1]), not
+                            # the two ends — both are disabled at the ends so the lookup can't run off. Full-bleed via -mx-4/md:-mx-6 with
                             # px-4 re-applied per page (cancels PuppyLayout's padding). Container takes the
                             # ACTIVE page's height with transition-[height] (the pages differ ~2x, so lerping
                             # would drag content under your finger) and scrolls the window to the pager top on
@@ -324,7 +351,10 @@ src/
       DayTimeline.jsx       # Vertical 24h track (720px = 1440min) for one day: awake fill + crate sessions as
                             # dark-blue bands (square edges — they're time spans), "now" line on today.
                             # 💧/💩 pills mirror each other either side of the track, each on a leader line
-                            # back to the exact minute; accidents turn the pill red. FOOD IS THE OUTERMOST
+                            # back to the exact minute; accidents turn the pill red. 🤮 VOMIT SHARES THE
+                            # POOP (right) LANE and is always red — the four lanes already spend the whole
+                            # half-width, and a vomit is rare enough that a same-minute collision with a
+                            # poop is a fair trade. PILL_EMOJI is the list of what gets a pill. FOOD IS THE OUTERMOST
                             # LEFT LANE (outboard of pee): 🍽️+time in accent for a serving going down, a
                             # bare "50%" in muted for a reading — there isn't lane width for two
                             # emoji+time pills, and the weight difference matches the meaning. Unlike
@@ -354,6 +384,20 @@ src/
       TimelineEditSheet.jsx # Retime or delete one timeline entry (labels 'Food down'/'Food check', with
                             # foodSummary in the subtitle) — events → updateEvent/deleteEvent,
                             # sessions → updateSession/deleteSession (delete removes start+end together).
+      WeightChart.jsx       # Page 3 of the pager. Hand-rolled SVG (no chart library in the project):
+                            # her logged weights as an ink line + dots over the projected growth band
+                            # (accent fill + dashed mid), a dashed green goal line, and a "today" rule.
+                            # Range chips Life/3mo/6mo/1y/All; the domain runs birth → birth+18mo, so a
+                            # range longer than her life reaches into the FUTURE and shows where the
+                            # band lands. Default = 1y, except under a year old → her whole life
+                            # (birth→today), which is the only window where every point is on screen.
+                            # Drag pans within the domain: the wrapper is `touch-action: pan-y`, which
+                            # keeps vertical page scroll but claims horizontal gestures from
+                            # PuppyPager's snap scroller (so swiping back from this page means the
+                            # ‹ button, by design). The goal line is skipped when it's off-scale —
+                            # on the birth→today view an adult target would flatten her real data.
+                            # Takes NO `now` prop: Puppy.jsx re-renders every second and nothing here
+                            # changes faster than daily, so today is resolved once per mount.
       FoodCard.jsx          # Today's food, from foodDayTotals: hero = cups PUT DOWN (the number that's
                             # actually known), with servings · ~eaten · what's left beside it
       TodayCard.jsx         # Potty history (day only). Top: the SELECTED day's success % + two pill
@@ -410,12 +454,15 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
   row, ring 44px — Weight). Emoji sits inside a progress ring (SVG) that fills toward the overdue point
   and colors ok/amber/red; active session = full accent ring; overdue = `pupPulse` animation. Status
   border reinforces the ring. 500ms long-press opens the detail sheet.
-- **Tile order (day):** Pee → Poop → Food → Crate full-width stacked, then Walk at half width; below
-  them SleepCard → Weight (wide) → Food → Today. Walk/Alone/Weight show no idle counter.
-  All of that is page 1 of the tab-wide pager; the header sits above it and doesn't move.
+- **Tile order (day):** Pee → Poop → Food → Crate full-width stacked, then Walk + Vomit at half width;
+  below them SleepCard → Age (wide) → Weight (wide) → Food → Today. Walk/Alone/Weight show no idle
+  counter; Vomit shows today's COUNT rather than a timer (there's no target to be due against).
+  All of that is page 1 of a three-page tab-wide pager (cards → timeline → weight); the header sits
+  above it and doesn't move.
 - **Timeline:** vertical 24h track (square-edged spans), `pup.sleep`/`pup.awake` fill matching the bar.
   💧 left / 💩 right as mirrored pills on `pup.line` leader lines; accidents turn the pill `pup.red`.
-  `pup.accent` walks drawn on the track itself, with a leader out to a minutes-only pill. Food is the
+  `pup.accent` walks drawn on the track itself, with a leader out to a minutes-only pill. 🤮 vomit
+  rides the poop lane, always in `pup.red`. Food is the
   outermost left lane, pinned to the card edge: 🍽️+time in `pup.accent` for a serving, a bare `50%`
   in `pup.muted` for a reading, both on long leaders that pass *behind* the pee pills.
 - **Header:** serif name + a muted smart status line (`smartStatus`) surfacing the most urgent thing.
@@ -436,8 +483,21 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
 
 ## What's Built (Puppy)
 - **Default tab:** the app lands on Poppy — `/dashboard` redirects to `/dashboard/puppy`, Home is `/dashboard/home`.
-- **Realtime care log:** tap-to-log tiles (Pee/Poop/Food/Crate full-width, Walk small, Weight wide);
-  two phones sync live. Alone is defined but hidden.
+- **Realtime care log:** tap-to-log tiles (Pee/Poop/Food/Crate full-width, Walk + Vomit small, Age and
+  Weight wide); two phones sync live. Alone is defined but hidden.
+- **Vomit log:** a tap logs it outright — no location question, no detail at all. The tile reads
+  today's count ("2 / today / last at 3:42 PM"); long-press backdates or edits/deletes the last one,
+  same sheet as everything else. Shows on the day timeline as a red 🤮 pill in the poop lane. Not in
+  the night view, and deliberately absent from the potty success rate — it isn't a potty.
+- **Age card:** a short wide row directly above Weight. Tap flips it between her age ("12 weeks /
+  12w 1d") and her birthday ("Jun 13 / born Sat · 2026"); a reload always comes back on the age.
+  Long-press opens the profile, which is where the birthday is actually set.
+- **Weight & growth chart:** a third pager page after the timeline. Her logged weights over a
+  projected growth band (upper/lower estimate of the adult dog, derived from her own weigh-ins, with
+  the profile's target drawn separately as a goal line). Range chips Life/3mo/6mo/1y/All; anything
+  longer than her life so far reaches into the future so you can see where the band lands. Defaults
+  to a year, or her whole life while she's under one. Drag the chart to pan through the domain
+  (birth → 18 months) — that gesture wins over the pager's swipe on this page, by design.
 - **Potty flow:** pee/poop tap → Pad/Street/Accident chooser (× cancels — nothing logged). Accidents feed success rate.
 - **Sessions:** crate/alone/walk toggle (first tap opens, second closes), live elapsed; DB enforces one open per type.
 - **Timers:** minute granularity everywhere except the Alone card (seconds). Walk, Alone and Weight

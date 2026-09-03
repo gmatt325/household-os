@@ -33,6 +33,9 @@ const GUIDES = [
 // smaller than pee/poop, which is what buys the 10px of clearance from pee.
 const TRACK_W = 36
 const LEADER = 8 // pee/poop connector length
+// Which events get a pill, and what it shows. Pee is the left lane; everything
+// else here mirrors it on the right.
+const PILL_EMOJI = { pee: '💧', poop: '💩', vomit: '🤮' }
 const WALK_LANE_X = 99
 const WALK_LEADER = WALK_LANE_X - TRACK_W / 2 // walk pill reaches back to the track
 
@@ -62,8 +65,8 @@ function dayOptions(count = 14) {
 }
 
 // One day laid out vertically, midnight to midnight: asleep (in crate) vs awake
-// along the track, walks as accent segments beside it, pee on the left and poop
-// on the right. Tap anything to retime or delete it.
+// along the track, walks as accent segments beside it, pee on the left and
+// poop/vomit on the right. Tap anything to retime or delete it.
 export default function DayTimeline({ dayISO, onDayChange, now, night }) {
   const { events, sessions, dayStartMs, dayEndMs, loading, error, refetch } = usePuppyDay(dayISO)
   const [editing, setEditing] = useState(null) // { kind: 'event'|'session', row }
@@ -123,13 +126,18 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
   const openOther = (s) =>
     sessions.some((o) => o.session_type === s.session_type && !o.ended_at && o.id !== s.id)
 
+  // Pee owns the left lane; poop and vomit share the right one. Vomit gets no
+  // lane of its own because the four existing lanes already spend the whole
+  // half-width (see the measurements above), and it's rare enough that a
+  // same-minute collision with a poop is a fair trade for keeping them legible.
   const marks = ready
     ? events
-        .filter((e) => e.event_type === 'pee' || e.event_type === 'poop')
+        .filter((e) => PILL_EMOJI[e.event_type])
         .map((e) => ({
           event: e,
           min: (new Date(e.occurred_at).getTime() - dayStartMs) / 60000,
-          accident: e.detail?.location === 'indoor_accident',
+          // Only a potty can be an accident; a vomit is flagged on its own terms.
+          bad: e.detail?.location === 'indoor_accident' || e.event_type === 'vomit',
         }))
         .filter((m) => m.min >= 0 && m.min <= SLEEP_DAY_MIN)
     : []
@@ -174,6 +182,7 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-pup-accent" /> walk
         </span>
         <span className="flex items-center gap-1.5">🍽️ food · % left</span>
+        <span className="flex items-center gap-1.5">🤮 sick</span>
       </div>
 
       <p className="-mt-2 mb-4 text-[11px] text-pup-muted/80">Tap a block to retime it.</p>
@@ -333,10 +342,10 @@ export default function DayTimeline({ dayISO, onDayChange, now, night }) {
             const pill = (
               <span
                 className={`flex flex-none items-center gap-1 whitespace-nowrap rounded-full border bg-pup-card px-1 py-1 text-[11px] leading-none tabular-nums ${
-                  m.accident ? 'border-pup-red bg-pup-red/10 text-pup-red' : 'border-pup-line text-pup-muted'
+                  m.bad ? 'border-pup-red bg-pup-red/10 text-pup-red' : 'border-pup-line text-pup-muted'
                 }`}
               >
-                <span className="text-[13px] leading-none">{pee ? '💧' : '💩'}</span>
+                <span className="text-[13px] leading-none">{PILL_EMOJI[m.event.event_type]}</span>
                 {formatClockShort(m.event.occurred_at)}
               </span>
             )

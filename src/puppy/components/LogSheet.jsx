@@ -185,6 +185,10 @@ export default function LogSheet({
     if (lbs === '') return
     run(() => logEvent('weight', { lbs: Number(lbs) }, iso(when)))
   }
+  // `simple` cards (Vomit) carry no detail at all — the time IS the whole entry.
+  function createSimple() {
+    run(() => logEvent(card.type, null, iso(when)))
+  }
 
   // ---- session actions ----
   function endOpen() {
@@ -445,6 +449,12 @@ export default function LogSheet({
                   Log weight
                 </button>
               </>
+            )}
+
+            {card.simple && (
+              <button type="button" onClick={createSimple} disabled={busy} className={primaryBtn}>
+                Log {noun}
+              </button>
             )}
 
             {err && <p className="text-sm text-pup-red">{err}</p>}

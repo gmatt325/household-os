@@ -11,6 +11,7 @@ const LABELS = {
   meal: 'Food down',
   food_check: 'Food check',
   weight: 'Weight',
+  vomit: 'Sick',
   walk: 'Walk',
   crate: 'Crate',
   alone: 'Alone',
