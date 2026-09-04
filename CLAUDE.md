@@ -43,7 +43,7 @@ A **Puppy tab** also lives alongside — real-time puppy care logging (potty/foo
 
 **Puppy (all have RLS enabled with `authenticated` select/insert/update/delete policies):**
 - `puppy_profile` — id, name, dob, target_weight_lbs, vet_name, vet_phone, notes, created_at. Single row; `dob` drives the dynamic pee target.
-- `puppy_events` — id, event_type (`puppy_event_type`), occurred_at (editable, for backdate), detail (JSONB), notes, created_at. `detail` conventions: pee/poop → `{ "location": "pad" | "street" | "indoor_accident" }` (indoor_accident = failure; pad/street = success); food is a **bowl with a running level** — `meal` = food went down `{ "added_cups": 0.25, "left_pct": 10, "bowl_cups": 0.275 }`, `food_check` = a reading `{ "left_pct": 50, "bowl_cups": 0.1375 }` (plus `"removed": true` when the bowl was picked up rather than eaten); weight → `{ "lbs": 4.2 }`. **`left_pct` is read against the FULL MARK** — the level right after food last went down — so "¼ cup, then 50% left, then 10% left" is 0.25 → 0.125 → 0.025, not compounded. `bowl_cups` is absolute and computed at write time, which is what lets one row be edited or deleted without corrupting the rest of the chain. Legacy meals `{ "made_cups", "ate_pct" }` (and older `{ "grams" }`) are still read via a compat branch in `normalizeFoodRow`; nothing was backfilled.
+- `puppy_events` — id, event_type (`puppy_event_type`), occurred_at (editable, for backdate), detail (JSONB), notes, created_at. `detail` conventions: pee/poop → `{ "location": "pad" | "street" | "indoor_accident" }` (indoor_accident = failure; pad/street = success); food is a **bowl with a running level** — `meal` = food went down `{ "added_cups": 0.3333, "left_pct": 10, "bowl_cups": 0.3667 }`, `food_check` = a reading `{ "left_pct": 50, "bowl_cups": 0.1375 }` (plus `"removed": true` when the bowl was picked up rather than eaten); weight → `{ "lbs": 4.2 }`. **`left_pct` is read against the FULL MARK** — the level right after food last went down — so "1/3 cup, then 50% left, then 10% left" is 0.333 → 0.167 → 0.033, not compounded. `bowl_cups` is absolute and computed at write time, which is what lets one row be edited or deleted without corrupting the rest of the chain. Legacy meals `{ "made_cups", "ate_pct" }` (and older `{ "grams" }`) are still read via a compat branch in `normalizeFoodRow`; nothing was backfilled.
 - `puppy_sessions` — id, session_type (`puppy_session_type`: crate | alone | walk), started_at, ended_at (null = in progress), alone (bool), notes, created_at. Partial unique index `puppy_sessions_one_open_per_type` enforces at most one open session per type. Crate, Alone, and Walk are all start/stop timers.
 - `puppy_targets` — id, event_type (text), target_minutes (→ amber), overdue_minutes (→ red), active. Seeded: pee 90/120, poop 240/360, meal 240/300, crate 120/180, weight 10080/10080. **`weight` is `active = false`** — the Weight tile shows the last logged value, never a countdown. `walk`/`alone`/`vomit` have no rows at all (also no counters). Pee is overridden dynamically from age in the client (fractional age × ~60 min/month — smooth ramp, clamped 45–240 min).
 
@@ -216,9 +216,12 @@ src/
                             # line, which is the only way the chart can say she's tracking above it.
                             # bandSamples() samples the band for the SVG. CHART_DOMAIN_MONTHS = 18 so
                             # the curve visibly flattens past adulthood.
-      food.js               # THE BOWL MODEL — the one place food math lives. SCOOP_CUPS (0.25) +
-                            # DAILY_SCOOP_TARGET (3) define the day's goal; scoops are counted by
-                            # VOLUME (putDownCups / 0.25), so a 1/2-cup pour reads as 2 scoops, not 1.
+      food.js               # THE BOWL MODEL — the one place food math lives. SCOOP_CUPS (1/3) +
+                            # DAILY_SCOOP_TARGET (3) define the day's goal — 1 cup a day; scoops are
+                            # counted by VOLUME (putDownCups / (1/3)), so a 2/3-cup pour reads as 2
+                            # scoops, not 1, and an older 1/4-cup serving honestly reads as 0.8.
+                            # CUP_OPTIONS leads with 1/3 (= DEFAULT_ADDED_CUPS) and keeps the exact
+                            # fraction rather than 0.33, so three of them sum to a clean 1.00 cup.
                             # formatScoops shows whole numbers cleanly and "2.4" for an odd pour.
                             # normalizeFoodRow (single
                             # shape for meal / food_check / legacy rows), foodRowsAsc, bowlState →
@@ -319,11 +322,11 @@ src/
                             # most-recent edit/delete block is hidden for sessions while one is open.
       WeightSheet.jsx       # Log a weight event ({ lbs }) — used by card + weekly prompt
       FoodSheet.jsx         # Tap-Food sheet, STATE-AWARE like LogSheet is for an open crate session.
-                            # Food in the bowl → an accent banner ("¼ cup down at 8:12a · about 0.12
+                            # Food in the bowl → an accent banner ("1/3 cup down at 8:12a · about 0.12
                             # cups left"), then "How much is left?" (Empty chip pinned outside a 100→0
                             # scroller, opening on the LAST reading) → Save check; below a divider, a
                             # collapsed "+ Put more food down" that expands to cup chips and REUSES the
-                            # left-% already chosen above, echoing it back ("1/4 cup onto 10% left →
+                            # left-% already chosen above, echoing it back ("1/3 cup onto 10% left →
                             # 0.28 cups in the bowl"). Plus a muted "picked it up (she didn't eat it)"
                             # link → { removed: true }. Empty bowl → skips the question entirely, just
                             # cups + Put food down. Exports LeftPctField / CupsField / AddPreview
@@ -467,7 +470,7 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
   in `pup.muted` for a reading, both on long leaders that pass *behind* the pee pills.
 - **Header:** serif name + a muted smart status line (`smartStatus`) surfacing the most urgent thing.
 - **Celebration:** `PawBurst` (6 `🐾` via `pawBurst` keyframe) on a successful potty; day mode only.
-- **Food tile, two states:** food in the bowl → accent/active, `50%`, "¼ cup at 8:12a · tap to
+- **Food tile, two states:** food in the bowl → accent/active, `50%`, "1/3 cup at 8:12a · tap to
   update". Bowl empty → **`2 of 3` / "scoops today" / "9h 53m since last"** — the ring fills with the
   day's scoop progress while the border/text colour still comes from the time-since-last meal target,
   so ring length answers "how much has she had today" and colour answers "is she due". There is no
@@ -527,11 +530,11 @@ Tasks are shown based on three modes — determined at fetch time in `useTodaysT
   you happen to notice — no waiting around for her to finish. Tapping Food is state-aware: bowl empty →
   just pick cups; food down → "How much is left?" (Empty + a 100→0 scroller opening on the last
   reading) with **+ Put more food down** below it reusing that same answer, echoed back as
-  "1/4 cup onto 10% left → 0.28 cups in the bowl". A **picked it up** link zeroes the bowl without
-  crediting the remainder as eaten. Percentages read against the full mark, so ¼ cup → 50% → 10% is
-  0.25 → 0.125 → 0.025. The tile becomes the bowl while food is down (accent, "50%", "¼ cup at 8:12a")
-  and reverts to a `2 of 3` scoop-progress readout once it's empty (3 x 1/4-cup scoops a day, counted
-  by volume — see SCOOP_CUPS/DAILY_SCOOP_TARGET in food.js). Food rows also get their own timeline lane.
+  "1/3 cup onto 10% left → 0.37 cups in the bowl". A **picked it up** link zeroes the bowl without
+  crediting the remainder as eaten. Percentages read against the full mark, so 1/3 cup → 50% → 10% is
+  0.333 → 0.167 → 0.033. The tile becomes the bowl while food is down (accent, "50%", "1/3 cup at
+  8:12a") and reverts to a `2 of 3` scoop-progress readout once it's empty (3 x 1/3-cup scoops a day
+  = 1 cup, counted by volume — see SCOOP_CUPS/DAILY_SCOOP_TARGET in food.js). Food rows also get their own timeline lane.
 - **Potty history card:** big success % + pee/poop counts with their own accident counts, for whichever
   day is selected. The bar strip swipes (or arrows) back 12 weeks, labelled weekday over `9/1`; every day
   is tappable, and a long-press offers to open that day on the timeline. Resets to this week + today on reload.
