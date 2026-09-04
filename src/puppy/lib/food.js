@@ -8,8 +8,8 @@
 //   food_check  a look at it     { left_pct, bowl_cups, removed? }
 //
 // `left_pct` is what the user actually tapped, read against the FULL MARK — the
-// level right after food last went down. That's the scale the eye uses: "¼ cup
-// down, then 50% left, then 10% left" is 0.25 → 0.125 → 0.025, not each
+// level right after food last went down. That's the scale the eye uses: "1/3 cup
+// down, then 50% left, then 10% left" is 0.333 → 0.167 → 0.033, not each
 // percentage compounded onto the one before it.
 //
 // `bowl_cups` is the ABSOLUTE level at that instant, computed here at write time.
@@ -23,9 +23,14 @@
 
 import { logEvent } from './supabaseQueries.js'
 
+// 1/3 is the scoop she's actually fed, so it leads and it's the default. The
+// thirds are kept as exact fractions rather than 0.33: three of them then sum to
+// a clean 1.00 cup, which is the whole point of the daily target.
 export const CUP_OPTIONS = [
+  { label: '1/3', value: 1 / 3 },
   { label: '1/4', value: 0.25 },
   { label: '1/2', value: 0.5 },
+  { label: '2/3', value: 2 / 3 },
   { label: '3/4', value: 0.75 },
   { label: '1', value: 1 },
 ]
@@ -34,13 +39,14 @@ export const CUP_OPTIONS = [
 // drag left as the bowl empties. `Empty` gets its own chip beside the scroller.
 export const LEFT_PCT_OPTIONS = Array.from({ length: 21 }, (_, i) => 100 - i * 5)
 
-export const DEFAULT_ADDED_CUPS = 0.25
+export const DEFAULT_ADDED_CUPS = 1 / 3
 
-// A "scoop" is the unit the day is counted in: one 1/4-cup serving, three a day.
-// Counting by VOLUME rather than by number-of-servings means a 1/2-cup pour
-// correctly reads as two scoops instead of one. Bump DAILY_SCOOP_TARGET as she
-// grows — it's the only place the goal is written down.
-export const SCOOP_CUPS = 0.25
+// A "scoop" is the unit the day is counted in: one 1/3-cup serving, three a day,
+// so the goal is 1 cup. Counting by VOLUME rather than by number-of-servings
+// means a 2/3-cup pour correctly reads as two scoops instead of one — and an
+// older 1/4-cup serving honestly reads as 0.8 of one. Bump DAILY_SCOOP_TARGET as
+// she grows; these two are the only place the goal is written down.
+export const SCOOP_CUPS = 1 / 3
 export const DAILY_SCOOP_TARGET = 3
 
 // Below this the bowl reads as empty — kills float dust like 2e-17 left after a
